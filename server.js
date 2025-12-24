@@ -2,9 +2,13 @@ import express from "express";
 import sqlite3 from "sqlite3";
 import fs from "fs";
 import path from "path";
+import cors from "cors"; // Added for cross-origin support
 
 const app = express();
 const PORT = 3000;
+
+// Enable CORS so the Cloud Run app can access this local server
+app.use(cors()); 
 
 // DB
 const db = new sqlite3.Database("./photos.db");
