@@ -2,19 +2,28 @@ import express from "express";
 import sqlite3 from "sqlite3";
 import fs from "fs";
 import path from "path";
-import cors from "cors"; // Essential for bridging your different domains
+import cors from "cors";
 
 const app = express();
 const PORT = 3000;
 
-// --- SECURITY CONFIGURATION ---
-// This explicitly tells the browser that your website is allowed to read data from this API.
+// --- ROBUST SECURITY CONFIGURATION (CORS) ---
+// This handles both the data request and the hidden "preflight" handshake.
 const corsOptions = {
-  origin: 'https://photos.milhizerfamilyphotos.org', // Your frontend URL
-  optionsSuccessStatus: 200 // For legacy browser compatibility
+  origin: 'https://photos.milhizerfamilyphotos.org', // Exact domain, no trailing slash
+  methods: ['GET', 'POST', 'OPTIONS'], // Explicitly allow preflight
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200 
 };
 
-app.use(cors(corsOptions)); 
+// 1. Apply CORS to all routes
+app.use(cors(corsOptions));
+
+// 2. Explicitly handle PREFLIGHT (OPTIONS) requests
+// This stops the "Origin not allowed" error before it starts.
+app.options('*', cors(corsOptions)); 
+
 app.use(express.json());
 
 // --- DATABASE CONNECTION ---
@@ -104,7 +113,7 @@ app.listen(PORT, () => {
   console.log(`External Access: https://api.milhizerfamilyphotos.org`);
 });
 
-// Graceful shutdown: Close DB connection when server stops
+// Graceful shutdown
 process.on('SIGINT', () => {
   db.close((err) => {
     if (err) {
