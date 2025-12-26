@@ -2,40 +2,43 @@ import express from "express";
 import sqlite3 from "sqlite3";
 import fs from "fs";
 import path from "path";
-import cors from "cors"; // The security helper we just installed
+import cors from "cors"; // Essential for bridging your different domains
 
 const app = express();
 const PORT = 3000;
 
-// This line tells the server it is okay to send data to your Google Cloud website
-app.use(cors()); 
+// --- SECURITY CONFIGURATION ---
+// This explicitly tells the browser that your website is allowed to read data from this API.
+const corsOptions = {
+  origin: 'https://photos.milhizerfamilyphotos.org', // Your frontend URL
+  optionsSuccessStatus: 200 // For legacy browser compatibility
+};
 
-// JSON support
+app.use(cors(corsOptions)); 
 app.use(express.json());
 
-// DB Connection
-const db = new sqlite3.Database("./photos.db");
+// --- DATABASE CONNECTION ---
+const db = new sqlite3.Database("./photos.db", (err) => {
+  if (err) {
+    console.error("Error connecting to the database:", err.message);
+  } else {
+    console.log("Connected to the SQLite database.");
+  }
+});
 
-// -----------------------------
-// API: List photos
-// -----------------------------
+// --- API ROUTES ---
+
+// 1. List all photos
 app.get("/api/photos", (req, res) => {
   const limit = Number(req.query.limit || 200);
 
   db.all(
-    `
-    SELECT
-      id,
-      filename
-    FROM photos
-    ORDER BY id DESC
-    LIMIT ?
-    `,
+    `SELECT id, filename FROM photos ORDER BY id DESC LIMIT ?`,
     [limit],
     (err, rows) => {
       if (err) {
         console.error(err);
-        return res.status(500).json({ error: "DB error" });
+        return res.status(500).json({ error: "Database error" });
       }
 
       const results = rows.map((r) => ({
@@ -50,9 +53,7 @@ app.get("/api/photos", (req, res) => {
   );
 });
 
-// -----------------------------
-// Serve thumbnail BY ID
-// -----------------------------
+// 2. Serve a thumbnail by ID
 app.get("/thumbnails/:id", (req, res) => {
   const id = Number(req.params.id);
 
@@ -64,21 +65,17 @@ app.get("/thumbnails/:id", (req, res) => {
         return res.status(404).send("Thumbnail not found");
       }
 
-      const filePath = row.thumbnail_path;
-
+      const filePath = path.resolve(row.thumbnail_path);
       if (!fs.existsSync(filePath)) {
-        console.error("Missing thumbnail:", filePath);
-        return res.status(404).send("Thumbnail missing");
+        return res.status(404).send("Thumbnail file missing on disk");
       }
 
-      res.sendFile(path.resolve(filePath));
+      res.sendFile(filePath);
     }
   );
 });
 
-// -----------------------------
-// Serve FULL image BY ID
-// -----------------------------
+// 3. Serve a full photo by ID
 app.get("/photos/:id", (req, res) => {
   const id = Number(req.params.id);
 
@@ -90,17 +87,30 @@ app.get("/photos/:id", (req, res) => {
         return res.status(404).send("Photo not found");
       }
 
-      const filePath = row.full_path;
-
+      const filePath = path.resolve(row.full_path);
       if (!fs.existsSync(filePath)) {
-        return res.status(404).send("Photo missing");
+        return res.status(404).send("Full photo file missing on disk");
       }
 
-      res.sendFile(path.resolve(filePath));
+      res.sendFile(filePath);
     }
   );
 });
 
+// --- START SERVER ---
 app.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`);
+  console.log(`Backend server is active!`);
+  console.log(`Local Access: http://localhost:${PORT}`);
+  console.log(`External Access: https://api.milhizerfamilyphotos.org`);
+});
+
+// Graceful shutdown: Close DB connection when server stops
+process.on('SIGINT', () => {
+  db.close((err) => {
+    if (err) {
+      console.error(err.message);
+    }
+    console.log('Database connection closed.');
+    process.exit(0);
+  });
 });
