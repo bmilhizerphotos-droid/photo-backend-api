@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 
-// Define the shape of a Photo object for TypeScript
 interface Photo {
   id: number;
   filename: string;
@@ -14,10 +13,9 @@ function App() {
   const [offset, setOffset] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
   const [hasMore, setHasMore] = useState<boolean>(true);
+  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
   
-  // The observer tracks the last element to trigger more loading
   const observer = useRef<IntersectionObserver | null>(null);
-
   const LIMIT = 50;
 
   const fetchPhotos = useCallback(async () => {
@@ -34,10 +32,9 @@ function App() {
       const data: Photo[] = await response.json();
       
       if (data.length < LIMIT) {
-        setHasMore(false); // No more photos left in the database
+        setHasMore(false);
       }
       
-      // Append the new batch to the existing photos
       setPhotos(prev => [...prev, ...data]);
       setOffset(prev => prev + LIMIT);
     } catch (err) {
@@ -47,12 +44,10 @@ function App() {
     }
   }, [offset, loading, hasMore]);
 
-  // Initial load on component mount
   useEffect(() => {
     fetchPhotos();
   }, []);
 
-  // Intersection Observer Logic
   const lastPhotoElementRef = useCallback((node: HTMLDivElement) => {
     if (loading) return;
     if (observer.current) observer.current.disconnect();
@@ -74,22 +69,30 @@ function App() {
 
       <div className="photo-grid">
         {photos.map((photo, index) => {
-          // If it's the last photo in the current array, attach the observer
-          if (photos.length === index + 1) {
-            return (
-              <div ref={lastPhotoElementRef} key={`${photo.id}-${index}`} className="photo-card">
-                <img src={photo.thumbnailUrl} alt={photo.filename} loading="lazy" />
-              </div>
-            );
-          } else {
-            return (
-              <div key={`${photo.id}-${index}`} className="photo-card">
-                <img src={photo.thumbnailUrl} alt={photo.filename} loading="lazy" />
-              </div>
-            );
-          }
+          const isLast = photos.length === index + 1;
+          return (
+            <div 
+              ref={isLast ? lastPhotoElementRef : null} 
+              key={`${photo.id}-${index}`} 
+              className="photo-card"
+              onClick={() => setSelectedPhoto(photo)}
+            >
+              <img src={photo.thumbnailUrl} alt={photo.filename} loading="lazy" />
+            </div>
+          );
         })}
       </div>
+
+      {/* Lightbox Modal */}
+      {selectedPhoto && (
+        <div className="lightbox-overlay" onClick={() => setSelectedPhoto(null)}>
+          <div className="lightbox-content">
+            <img src={selectedPhoto.fullUrl} alt={selectedPhoto.filename} />
+            <button className="close-btn" onClick={() => setSelectedPhoto(null)}>&times;</button>
+            <p className="filename-label">{selectedPhoto.filename}</p>
+          </div>
+        </div>
+      )}
 
       {loading && (
         <div className="status-message">
