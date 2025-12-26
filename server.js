@@ -7,26 +7,32 @@ import cors from "cors";
 const app = express();
 const PORT = 3000;
 
-// --- ROBUST SECURITY CONFIGURATION (CORS) ---
-// This handles both the data request and the hidden "preflight" handshake.
+// --- 1. MANUAL HEADER INJECTION (The "Brute Force" Fix) ---
+// This ensures headers are set even if the CORS package is bypassed.
+app.use((req, res, next) => {
+  // Explicitly allow your website domain
+  res.header("Access-Control-Allow-Origin", "https://photos.milhizerfamilyphotos.org");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Credentials", "true");
+
+  // Immediately respond to the browser's "preflight" handshake
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// --- 2. STANDARD CORS MIDDLEWARE ---
 const corsOptions = {
-  origin: 'https://photos.milhizerfamilyphotos.org', // Exact domain, no trailing slash
-  methods: ['GET', 'POST', 'OPTIONS'], // Explicitly allow preflight
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: 'https://photos.milhizerfamilyphotos.org',
   credentials: true,
-  optionsSuccessStatus: 200 
+  optionsSuccessStatus: 200
 };
-
-// 1. Apply CORS to all routes
 app.use(cors(corsOptions));
-
-// 2. Explicitly handle PREFLIGHT (OPTIONS) requests
-// This stops the "Origin not allowed" error before it starts.
-app.options('*', cors(corsOptions)); 
-
 app.use(express.json());
 
-// --- DATABASE CONNECTION ---
+// --- 3. DATABASE CONNECTION ---
 const db = new sqlite3.Database("./photos.db", (err) => {
   if (err) {
     console.error("Error connecting to the database:", err.message);
@@ -35,12 +41,11 @@ const db = new sqlite3.Database("./photos.db", (err) => {
   }
 });
 
-// --- API ROUTES ---
+// --- 4. API ROUTES ---
 
-// 1. List all photos
+// List all photos
 app.get("/api/photos", (req, res) => {
   const limit = Number(req.query.limit || 200);
-
   db.all(
     `SELECT id, filename FROM photos ORDER BY id DESC LIMIT ?`,
     [limit],
@@ -49,76 +54,56 @@ app.get("/api/photos", (req, res) => {
         console.error(err);
         return res.status(500).json({ error: "Database error" });
       }
-
       const results = rows.map((r) => ({
         id: r.id,
         filename: r.filename,
         thumbnailUrl: `/thumbnails/${r.id}`,
         fullUrl: `/photos/${r.id}`,
       }));
-
       res.json(results);
     }
   );
 });
 
-// 2. Serve a thumbnail by ID
+// Serve a thumbnail by ID
 app.get("/thumbnails/:id", (req, res) => {
   const id = Number(req.params.id);
-
   db.get(
     `SELECT thumbnail_path FROM photos WHERE id = ?`,
     [id],
     (err, row) => {
-      if (err || !row) {
-        return res.status(404).send("Thumbnail not found");
-      }
-
+      if (err || !row) return res.status(404).send("Thumbnail not found");
       const filePath = path.resolve(row.thumbnail_path);
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).send("Thumbnail file missing on disk");
-      }
-
+      if (!fs.existsSync(filePath)) return res.status(404).send("File missing");
       res.sendFile(filePath);
     }
   );
 });
 
-// 3. Serve a full photo by ID
+// Serve a full photo by ID
 app.get("/photos/:id", (req, res) => {
   const id = Number(req.params.id);
-
   db.get(
     `SELECT full_path FROM photos WHERE id = ?`,
     [id],
     (err, row) => {
-      if (err || !row) {
-        return res.status(404).send("Photo not found");
-      }
-
+      if (err || !row) return res.status(404).send("Photo not found");
       const filePath = path.resolve(row.full_path);
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).send("Full photo file missing on disk");
-      }
-
+      if (!fs.existsSync(filePath)) return res.status(404).send("File missing");
       res.sendFile(filePath);
     }
   );
 });
 
-// --- START SERVER ---
+// --- 5. START SERVER ---
 app.listen(PORT, () => {
-  console.log(`Backend server is active!`);
-  console.log(`Local Access: http://localhost:${PORT}`);
-  console.log(`External Access: https://api.milhizerfamilyphotos.org`);
+  console.log(`Backend server active on port ${PORT}`);
+  console.log(`Allowed Origin: https://photos.milhizerfamilyphotos.org`);
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-  db.close((err) => {
-    if (err) {
-      console.error(err.message);
-    }
+  db.close(() => {
     console.log('Database connection closed.');
     process.exit(0);
   });
