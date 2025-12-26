@@ -14,11 +14,12 @@ jobs:
         with:
           node-version: 20
           
-      - name: Install Dependencies
-        run: npm install
-        
-      - name: Build Website
-        run: npx vite build
+      - name: Install and Build
+        # This tells GitHub to run these commands INSIDE the frontend folder
+        working-directory: ./frontend 
+        run: |
+          npm install
+          npx vite build
         env:
           VITE_API_BASE: ${{ secrets.VITE_API_BASE }}
           
@@ -29,3 +30,5 @@ jobs:
           firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_PHOTO_APP_F8102 }}'
           channelId: live
           projectId: photo-app-f8102
+          # This tells Firebase where the built files actually are
+          entryPoint: ./frontend
