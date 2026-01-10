@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
+import { fetchPhotos as apiFetchPhotos } from './api';
 
 interface Photo {
   id: number;
@@ -20,21 +21,15 @@ function App() {
 
   const fetchPhotos = useCallback(async () => {
     if (loading || !hasMore) return;
-    
+
     setLoading(true);
     try {
-      const response = await fetch(
-        `https://api.milhizerfamilyphotos.org/api/photos?limit=${LIMIT}&offset=${offset}`
-      );
-      
-      if (!response.ok) throw new Error("Network response was not ok");
-      
-      const data: Photo[] = await response.json();
-      
+      const data: Photo[] = await apiFetchPhotos(LIMIT, offset);
+
       if (data.length < LIMIT) {
         setHasMore(false);
       }
-      
+
       setPhotos(prev => [...prev, ...data]);
       setOffset(prev => prev + LIMIT);
     } catch (err) {

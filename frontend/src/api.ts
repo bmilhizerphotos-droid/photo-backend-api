@@ -3,12 +3,11 @@
  * Uses localhost in development and the production API domain in production.
  */
 
-const isDevelopment = import.meta.env.MODE === "development";
+// For development, always use local backend
+// TODO: In production, this should be "https://api.milhizerfamilyphotos.org"
+const rawBase = "http://127.0.0.1:3000";
 
-// Ensure the base URL is a valid absolute URL and has no trailing slash
-const rawBase = isDevelopment
-  ? "http://127.0.0.1:3000"
-  : "https://api.milhizerfamilyphotos.org";
+console.log("✅ API configured for localhost:", rawBase);
 
 export const API_BASE = rawBase.replace(/\/$/, "");
 
@@ -18,9 +17,10 @@ export const API_BASE = rawBase.replace(/\/$/, "");
  *  - array of photos (current backend)
  *  - { photos: [...] } (older/alternate clients)
  */
-export async function fetchPhotos() {
+export async function fetchPhotos(limit = 20, offset = 0) {
   const url = new URL("/api/photos", API_BASE);
-  url.searchParams.set("limit", "20");
+  url.searchParams.set("limit", limit.toString());
+  url.searchParams.set("offset", offset.toString());
 
   const res = await fetch(url.toString(), {
     method: "GET",
