@@ -32,6 +32,7 @@ function findFileRecursive(root, targetName) {
 function findFileCaseInsensitive(root, targetName) {
   const stack = [root];
   const targetLower = targetName.toLowerCase();
+  let foundPaths = [];
 
   while (stack.length > 0) {
     const dir = stack.pop();
@@ -42,14 +43,16 @@ function findFileCaseInsensitive(root, targetName) {
         if (entry.isDirectory()) {
           stack.push(fullPath);
         } else if (entry.name.toLowerCase() === targetLower) {
-          return fullPath;
+          foundPaths.push(fullPath);
         }
       }
     } catch {
       // ignore permission errors
     }
   }
-  return null;
+
+  // Return the first found path (there might be duplicates)
+  return foundPaths.length > 0 ? foundPaths[0] : null;
 }
 
 async function fixFilenames() {
@@ -77,13 +80,8 @@ async function fixFilenames() {
         correctedFilename = filename.substring(2);
       }
 
-      // Try to find the file with corrected filename
-      let filePath = findFileRecursive(BASE_PHOTO_DIR, correctedFilename);
-
-      // If not found, try case-insensitive search
-      if (!filePath) {
-        filePath = findFileCaseInsensitive(BASE_PHOTO_DIR, correctedFilename);
-      }
+      // Try to find the file with corrected filename (case-insensitive)
+      const filePath = findFileCaseInsensitive(BASE_PHOTO_DIR, correctedFilename);
 
       if (filePath) {
         // File found - update database if filename was corrected
