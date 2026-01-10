@@ -5,9 +5,7 @@
 
 // For development, always use local backend
 // TODO: In production, this should be "https://api.milhizerfamilyphotos.org"
-const rawBase = "http://127.0.0.1:3000";
-
-console.log("✅ API configured for localhost:", rawBase);
+const rawBase = "http://127.0.0.1:3001";
 
 export const API_BASE = rawBase.replace(/\/$/, "");
 

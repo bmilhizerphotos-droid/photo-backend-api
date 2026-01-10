@@ -5,7 +5,7 @@ import cors from "cors";
 import db from "./db.js";
 
 const app = express();
-const PORT = 3000;
+const PORT = 3001;
 
 // --- 1. MANUAL HEADER INJECTION (The "Brute Force" Fix) ---
 // This ensures headers are set even if the CORS package is bypassed.
@@ -48,7 +48,6 @@ const corsOptions = {
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     } else {
-      console.log(`❌ CORS blocked origin: ${origin}`);
       return callback(new Error('Not allowed by CORS'));
     }
   },
