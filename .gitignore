@@ -1,28 +1,86 @@
-# node
+﻿# =========================
+# Node / JavaScript
+# =========================
 node_modules/
+frontend/node_modules/
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
 
-# databases
+# =========================
+# Databases / local data
+# =========================
 *.db
 *.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
 
-# builds / zips
-*.zip
+# =========================
+# Builds / artifacts
+# =========================
 dist/
 frontend/dist/
+build/
+coverage/
+*.zip
 
-# OS / temp
+# =========================
+# OS / editor temp files
+# =========================
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
 
-# backups
+# =========================
+# Backups
+# =========================
 backup/
+_backup-*/
+_quarantine-*/
 *.bak
 
-# cloudflared binaries
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Firebase (local tooling cache) + secrets
+# =========================
+frontend/.firebase/
+firebase-debug.log*
+.firebase/
+.firebaserc.local
+
+# NEVER COMMIT service account keys
+firebase-service-account.json
+*service-account*.json
+*.pem
+*.p12
+
+# =========================
+# Cloudflared binaries
+# =========================
 cloudflared
 ncloudflared
+cloudflared.exe
+ncloudflared.exe
 
-# misc generated
+# =========================
+# Misc generated / test files
+# =========================
 test.jpg
 test.jpgsdv
+
+# =========================
+# Separate nested repo (Expo / mobile) - ignore entirely
+# =========================
+mobile/
