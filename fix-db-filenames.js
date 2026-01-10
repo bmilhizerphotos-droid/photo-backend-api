@@ -55,48 +55,57 @@ function findFileCaseInsensitive(root, targetName) {
 async function fixFilenames() {
   console.log("🔍 Starting filename fix process...");
 
-  // Get all photos from database
-  const rows = await db.all("SELECT id, filename FROM photos");
+  // Get total count first
+  const countResult = await db.get("SELECT COUNT(*) as total FROM photos");
+  const totalPhotos = countResult.total;
+  console.log(`📊 Found ${totalPhotos} photos in database`);
 
-  console.log(`📊 Found ${rows.length} photos in database`);
-
+  const batchSize = 1000;
   let fixed = 0;
   let notFound = 0;
+  let processed = 0;
 
-  for (const row of rows) {
-    const { id, filename } = row;
-    let correctedFilename = filename;
+  for (let offset = 0; offset < totalPhotos; offset += batchSize) {
+    const rows = await db.all("SELECT id, filename FROM photos LIMIT ? OFFSET ?", [batchSize, offset]);
 
-    // Remove leading ". " if present
-    if (filename.startsWith(". ")) {
-      correctedFilename = filename.substring(2);
-    }
+    for (const row of rows) {
+      const { id, filename } = row;
+      let correctedFilename = filename;
 
-    // Try to find the file with corrected filename
-    let filePath = findFileRecursive(BASE_PHOTO_DIR, correctedFilename);
-
-    // If not found, try case-insensitive search
-    if (!filePath) {
-      filePath = findFileCaseInsensitive(BASE_PHOTO_DIR, correctedFilename);
-    }
-
-    if (filePath) {
-      // File found - update database if filename was corrected
-      if (correctedFilename !== filename) {
-        console.log(`✅ Fixed ID ${id}: "${filename}" -> "${correctedFilename}"`);
-        await db.run("UPDATE photos SET filename = ? WHERE id = ?", [correctedFilename, id]);
-        fixed++;
+      // Remove leading ". " if present
+      if (filename.startsWith(". ")) {
+        correctedFilename = filename.substring(2);
       }
-    } else {
-      console.log(`❌ Not found: ID ${id}, filename: "${correctedFilename}"`);
-      notFound++;
+
+      // Try to find the file with corrected filename
+      let filePath = findFileRecursive(BASE_PHOTO_DIR, correctedFilename);
+
+      // If not found, try case-insensitive search
+      if (!filePath) {
+        filePath = findFileCaseInsensitive(BASE_PHOTO_DIR, correctedFilename);
+      }
+
+      if (filePath) {
+        // File found - update database if filename was corrected
+        if (correctedFilename !== filename) {
+          await db.run("UPDATE photos SET filename = ? WHERE id = ?", [correctedFilename, id]);
+          fixed++;
+        }
+      } else {
+        notFound++;
+      }
+
+      processed++;
     }
+
+    // Progress update every batch
+    console.log(`📈 Progress: ${processed}/${totalPhotos} (${Math.round(processed/totalPhotos*100)}%) - Fixed: ${fixed}, Not found: ${notFound}`);
   }
 
-  console.log(`\n📈 Summary:`);
+  console.log(`\n📈 Final Summary:`);
   console.log(`   Fixed: ${fixed}`);
   console.log(`   Not found: ${notFound}`);
-  console.log(`   Total processed: ${rows.length}`);
+  console.log(`   Total processed: ${processed}`);
 
   // Close database connection
   await db.close();
