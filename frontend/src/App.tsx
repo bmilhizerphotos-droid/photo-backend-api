@@ -224,7 +224,6 @@ function App() {
 
             {/* Photo Masonry Grid */}
             <PhotoMasonry photos={photos} onPhotoClick={handlePhotoClick} />
-          </div>
 
             {/* Sentinel goes AFTER the grid */}
             <div ref={sentinelRef} className="h-10" />
@@ -250,7 +249,7 @@ function App() {
                 <p>No photos found. Check back later!</p>
               </div>
             )}
-          </>
+          </div>
         );
 
       case 'people':
