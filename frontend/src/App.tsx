@@ -5,6 +5,7 @@ import { getRedirectResult } from 'firebase/auth';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
+import { Avatar } from './components/Avatar';
 
 type ViewType = 'photos' | 'people' | 'memories' | 'shared';
 
@@ -50,8 +51,6 @@ function App() {
   const [modalLoading, setModalLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [avatarError, setAvatarError] = useState(false);
-  const [avatarLoading, setAvatarLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Use the new infinite scroll hook
@@ -104,25 +103,6 @@ function App() {
       setUser(user);
       setAuthLoading(false);
       setAuthError(null); // Clear auth errors on successful auth
-      setAvatarError(false); // Reset avatar error on user change
-      setAvatarLoading(true);
-
-      // Preload avatar image to check if it loads
-      if (user?.photoURL) {
-        const img = new Image();
-        img.onload = () => {
-          setAvatarLoading(false);
-          setAvatarError(false);
-        };
-        img.onerror = () => {
-          console.log('Avatar failed to load, using fallback');
-          setAvatarLoading(false);
-          setAvatarError(true);
-        };
-        img.src = user.photoURL;
-      } else {
-        setAvatarLoading(false);
-      }
     });
 
     return () => unsubscribe();
@@ -354,25 +334,7 @@ function App() {
 
                   {/* User Info & Sign Out */}
                   <div className="flex items-center space-x-3">
-                    {avatarLoading ? (
-                      // Loading placeholder
-                      <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse"></div>
-                    ) : user.photoURL && !avatarError ? (
-                      <img
-                        src={user.photoURL}
-                        alt={user.displayName || 'User'}
-                        className="w-8 h-8 rounded-full"
-                        onError={() => {
-                          console.log('Avatar error fallback triggered');
-                          setAvatarError(true);
-                        }}
-                      />
-                    ) : (
-                      // Fallback avatar
-                      <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm font-medium">
-                        {(user.displayName || user.email || 'U')[0].toUpperCase()}
-                      </div>
-                    )}
+                    <Avatar photoURL={user.photoURL} name={user.displayName} />
                     <span className="text-sm text-gray-700">{user.displayName}</span>
                     <button
                       onClick={handleSignOut}
