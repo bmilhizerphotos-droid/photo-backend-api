@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchPhotos, getAuthenticatedImageUrl, Photo, preloadImage } from './api';
 import { auth, signInWithGoogle, signOutUser } from './firebase';
+import { getRedirectResult } from 'firebase/auth';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
 type ViewType = 'photos' | 'people' | 'memories' | 'shared';
@@ -26,8 +27,13 @@ function App() {
   const handleSignIn = async () => {
     try {
       await signInWithGoogle();
-    } catch (error) {
-      console.error('Error signing in:', error);
+    } catch (error: any) {
+      console.error('Popup authentication failed:', error.message);
+
+      // If popup fails due to browser policies, show alternative
+      if (error.message.includes('Cross-Origin') || error.message.includes('blocked')) {
+        alert('Popup authentication was blocked by browser security policies.\n\nPlease try:\n1. Disable browser security extensions temporarily\n2. Use an incognito/private window\n3. Or use a different browser (Chrome recommended)');
+      }
     }
   };
 
@@ -62,6 +68,22 @@ function App() {
       setLoading(false);
     }
   }, [loading, hasMore, currentView]);
+
+  // Handle redirect authentication result
+  useEffect(() => {
+    const handleRedirectResult = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result?.user) {
+          console.log('Redirect authentication successful');
+        }
+      } catch (error) {
+        console.error('Redirect authentication error:', error);
+      }
+    };
+
+    handleRedirectResult();
+  }, []);
 
   // Authentication state listener
   useEffect(() => {

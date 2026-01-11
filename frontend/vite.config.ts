@@ -16,6 +16,11 @@ export default defineConfig(({ mode }) => {
       // Force cache busting
       fs: {
         strict: false
+      },
+      // Fix Firebase popup authentication issues
+      headers: {
+        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+        'Cross-Origin-Embedder-Policy': 'credentialless'
       }
     },
     // Force rebuild on change

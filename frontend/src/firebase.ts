@@ -27,12 +27,21 @@ export const auth = getAuth(app);
 
 // Google provider
 const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account'
+});
 
 /**
- * Sign in using Google popup
+ * Sign in using Google popup (may fail in strict browsers)
  */
 export async function signInWithGoogle() {
-  return signInWithPopup(auth, googleProvider);
+  try {
+    return await signInWithPopup(auth, googleProvider);
+  } catch (error: any) {
+    console.warn('Popup authentication failed:', error.message);
+    console.log('Try using redirect authentication instead');
+    throw error;
+  }
 }
 
 /**
