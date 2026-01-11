@@ -219,11 +219,12 @@ function App() {
     switch (currentView) {
       case 'photos':
         return (
-          <>
+          <div className="px-4 sm:px-6 lg:px-8">
             {error && <pre className="text-red-600 whitespace-pre-wrap mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">{error}</pre>}
 
             {/* Photo Masonry Grid */}
             <PhotoMasonry photos={photos} onPhotoClick={handlePhotoClick} />
+          </div>
 
             {/* Sentinel goes AFTER the grid */}
             <div ref={sentinelRef} className="h-10" />
@@ -333,7 +334,7 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="py-8">
         {renderView()}
       </main>
 
