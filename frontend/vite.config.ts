@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => {
       },
       // Fix Firebase popup authentication issues
       headers: {
-        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
-        'Cross-Origin-Embedder-Policy': 'credentialless'
+        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups'
+        // Removed COEP to allow Firebase popups to work
       }
     },
     // Force rebuild on change
