@@ -35,7 +35,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [offset, loading, hasMore, currentView]);
+  }, [loading, hasMore, currentView]);
 
   // Initial load and view changes
   useEffect(() => {

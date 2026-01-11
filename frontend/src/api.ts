@@ -5,7 +5,11 @@
 
 import { getAuth } from 'firebase/auth';
 
-export const API_BASE = "https://photos.milhizerfamilyphotos.org";
+// Environment-based API configuration
+const isProduction = import.meta.env.PROD;
+export const API_BASE = isProduction
+  ? "https://photos.milhizerfamilyphotos.org"
+  : "http://127.0.0.1:3001";
 
 /**
  * Photo interface matching backend API response
