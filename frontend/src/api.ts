@@ -34,8 +34,6 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
   url.searchParams.set("offset", offset.toString());
   url.searchParams.set("limit", limit.toString());
 
-  console.log('Making API call to:', url.toString());
-
   const res = await fetch(url.toString(), {
     method: "GET",
     // Temporarily remove auth header for testing
@@ -44,14 +42,11 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
     // },
   });
 
-  console.log('API response status:', res.status);
-
   if (!res.ok) {
     throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
   }
 
   const data = await res.json();
-  console.log('API returned data:', data);
   return Array.isArray(data) ? data : data.photos ?? [];
 }
 

@@ -3,6 +3,8 @@ import { fetchPhotos, getAuthenticatedImageUrl, Photo, preloadImage } from './ap
 import { auth, signInWithGoogle, completeRedirectSignIn, signOutUser } from './firebase';
 import { getRedirectResult } from 'firebase/auth';
 import { onAuthStateChanged, User } from 'firebase/auth';
+import { useInfinitePhotos } from './hooks/useInfinitePhotos';
+import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
 
 type ViewType = 'photos' | 'people' | 'memories' | 'shared';
 
@@ -42,10 +44,6 @@ function FullImage({ src, alt = "", fallbackSrc, className }: FullImageProps) {
 }
 
 function App() {
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string>('');
   const [currentView, setCurrentView] = useState<ViewType>('photos');
@@ -56,8 +54,15 @@ function App() {
   const [avatarLoading, setAvatarLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const observer = useRef<IntersectionObserver | null>(null);
-  const LIMIT = 50;
+  // Use the new infinite scroll hook
+  const {
+    photos,
+    hasMore,
+    loading,
+    error,
+    reset,
+    loadMore,
+  } = useInfinitePhotos(fetchPhotos, 50);
 
   // Authentication handler - uses redirect as primary robust method
   const handleSignIn = async () => {
@@ -82,33 +87,6 @@ function App() {
     }
   };
 
-  // Load photos with infinite scroll
-  const loadPhotos = useCallback(async () => {
-    console.log('loadPhotos called:', { loading, hasMore, currentView, user: !!user, offset });
-
-    if (loading || !hasMore || currentView !== 'photos' || !user) {
-      console.log('loadPhotos blocked by condition:', { loading, hasMore, currentView, user: !!user });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      console.log('Calling fetchPhotos with offset:', offset, 'limit:', LIMIT);
-      const data = await fetchPhotos(offset, LIMIT);
-      console.log('fetchPhotos returned:', data.length, 'photos');
-
-      if (data.length < LIMIT) {
-        setHasMore(false);
-      }
-
-      setPhotos(prev => [...prev, ...data]);
-      setOffset(prev => prev + LIMIT);
-    } catch (err) {
-      console.error("Error fetching photos:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [loading, hasMore, currentView, user, offset]);
 
   // Handle redirect authentication result (combined with auth state listener)
 
@@ -150,36 +128,20 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Initial load and view changes - only when authenticated
+  // Initial load when entering photos view + user exists
   useEffect(() => {
-    if (currentView === 'photos' && user) {
-      loadPhotos();
-    } else if (!user) {
-      // Reset when not authenticated
-      setPhotos([]);
-      setOffset(0);
-      setHasMore(true);
-    } else {
-      // Reset for other views
-      setPhotos([]);
-      setOffset(0);
-      setHasMore(false);
-    }
-  }, [currentView, user, loadPhotos]);
+    if (currentView !== "photos") return;
+    if (!user) return;
 
-  // Infinite scroll observer
-  const lastPhotoElementRef = useCallback((node: HTMLDivElement | null) => {
-    if (loading) return;
-    if (observer.current) observer.current.disconnect();
+    reset();
+    void loadMore();
+  }, [currentView, user, reset, loadMore]);
 
-    observer.current = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting && hasMore && currentView === 'photos') {
-        loadPhotos();
-      }
-    });
-
-    if (node) observer.current.observe(node);
-  }, [loading, hasMore, loadPhotos, currentView]);
+  // Load more only when sentinel hits viewport
+  const sentinelRef = useIntersectionSentinel({
+    enabled: currentView === "photos" && !!user && hasMore && !loading,
+    onIntersect: () => void loadMore(),
+  });
 
   // Handle photo click for modal
   const handlePhotoClick = async (photo: Photo) => {
@@ -277,6 +239,8 @@ function App() {
       case 'photos':
         return (
           <>
+            {error && <pre className="text-red-600 whitespace-pre-wrap mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">{error}</pre>}
+
             {/* Photo Grid */}
             <div
               className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-7 space-y-6"
@@ -285,15 +249,12 @@ function App() {
                 rowGap: '24px'
               }}
             >
-              {photos.map((photo, index) => {
-                const isLast = photos.length === index + 1;
-                return (
-                  <div
-                    ref={isLast ? lastPhotoElementRef : null}
-                    key={`${photo.id}-${index}`}
-                    className="break-inside-avoid cursor-pointer group"
-                    onClick={() => handlePhotoClick(photo)}
-                  >
+              {photos.map((photo, index) => (
+                <div
+                  key={`${photo.id}-${index}`}
+                  className="break-inside-avoid cursor-pointer group"
+                  onClick={() => handlePhotoClick(photo)}
+                >
                     <div className="relative overflow-hidden rounded-lg bg-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
                       <img
                         src={photo.thumbnailUrl}
@@ -307,6 +268,9 @@ function App() {
                 );
               })}
             </div>
+
+            {/* Sentinel goes AFTER the grid */}
+            <div ref={sentinelRef} className="h-10" />
 
             {/* Loading States */}
             {loading && (
