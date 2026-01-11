@@ -6,7 +6,7 @@
 import { auth } from './firebase';
 
 // Use relative URLs - Vite proxy will handle routing to backend
-export const API_BASE = "";
+// No API_BASE needed for proxy setup
 
 /**
  * Photo interface matching backend API response
@@ -29,11 +29,9 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
   // }
   // const idToken = await user.getIdToken();
 
-  const url = new URL("/api/photos", API_BASE);
-  url.searchParams.set("offset", offset.toString());
-  url.searchParams.set("limit", limit.toString());
+  const url = `/api/photos?offset=${offset}&limit=${limit}`;
 
-  const res = await fetch(url.toString(), {
+  const res = await fetch(url, {
     method: "GET",
     // Temporarily remove auth header for testing
     // headers: {
@@ -65,11 +63,9 @@ export const getAuthenticatedImageUrl = async (imagePath: string): Promise<strin
 
   const idToken = await user.getIdToken();
 
-  const url = new URL("/api/photo-file", API_BASE);
-  url.searchParams.set("path", encodeURIComponent(imagePath));
-  url.searchParams.set("token", idToken);
+  const url = `/api/photo-file?path=${encodeURIComponent(imagePath)}&token=${idToken}`;
 
-  return url.toString();
+  return url;
 };
 
 /**
