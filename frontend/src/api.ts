@@ -3,7 +3,7 @@
  * Google Photos-style masonry gallery frontend
  */
 
-import { getAuth } from 'firebase/auth';
+import { auth } from './firebase';
 
 // Force development mode for local testing
 // TODO: Re-enable environment detection for production deployment
@@ -23,7 +23,6 @@ export interface Photo {
  * Fetches photos from the backend API
  */
 export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
-  const auth = getAuth();
   const user = auth.currentUser;
 
   if (!user) {
@@ -59,7 +58,6 @@ export const getAuthenticatedImageUrl = async (imagePath: string): Promise<strin
 
   if (imagePath.startsWith("http")) return imagePath;
 
-  const auth = getAuth();
   const user = auth.currentUser;
 
   if (!user) {
