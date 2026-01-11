@@ -5,11 +5,9 @@
 
 import { getAuth } from 'firebase/auth';
 
-// Environment-based API configuration
-const isProduction = import.meta.env.PROD;
-export const API_BASE = isProduction
-  ? "https://photos.milhizerfamilyphotos.org"
-  : "http://127.0.0.1:3001";
+// Force development mode for local testing
+// TODO: Re-enable environment detection for production deployment
+export const API_BASE = "http://127.0.0.1:3001";
 
 /**
  * Photo interface matching backend API response
