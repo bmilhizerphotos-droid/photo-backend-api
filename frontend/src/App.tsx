@@ -41,7 +41,7 @@ function App() {
 
   useEffect(() => {
     fetchPhotos();
-  }, []);
+  }, [fetchPhotos]);
 
   const lastPhotoElementRef = useCallback((node: HTMLDivElement | null) => {
     if (loading) return;
