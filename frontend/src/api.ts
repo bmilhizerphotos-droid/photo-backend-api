@@ -5,9 +5,8 @@
 
 import { auth } from './firebase';
 
-// Force development mode for local testing
-// TODO: Re-enable environment detection for production deployment
-export const API_BASE = "http://127.0.0.1:3001";
+// Use relative URLs - Vite proxy will handle routing to backend
+export const API_BASE = "";
 
 /**
  * Photo interface matching backend API response
