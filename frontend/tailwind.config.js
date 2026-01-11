@@ -5,16 +5,15 @@ export default {
     "./src/**/*.{ts,tsx,js,jsx}"
   ],
   safelist: [
-    'columns-2',
-    'columns-3',
-    'columns-4',
-    'columns-5',
-    'columns-6',
-    'sm:columns-3',
-    'md:columns-4',
-    'lg:columns-5',
-    'xl:columns-6',
-    'break-inside-avoid'
+    'grid-cols-2',
+    'grid-cols-3',
+    'grid-cols-4',
+    'grid-cols-5',
+    'grid-cols-6',
+    'sm:grid-cols-3',
+    'md:grid-cols-4',
+    'lg:grid-cols-5',
+    'xl:grid-cols-6'
   ],
   theme: {
     extend: {},

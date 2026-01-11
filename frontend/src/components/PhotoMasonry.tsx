@@ -8,14 +8,11 @@ interface PhotoMasonryProps {
 
 export function PhotoMasonry({ photos, onPhotoClick }: PhotoMasonryProps) {
   return (
-    <div
-      className="w-full columns-2 sm:columns-3 md:columns-4 lg:columns-5 xl:columns-6 gap-4"
-      style={{ columnFill: 'balance' }}
-    >
+    <div className="w-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
       {photos.map((photo) => (
         <div
           key={photo.id}
-          className="break-inside-avoid mb-4 cursor-pointer group inline-block w-full"
+          className="cursor-pointer group"
           onClick={() => onPhotoClick(photo)}
         >
           <div className="relative overflow-hidden rounded-lg bg-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">

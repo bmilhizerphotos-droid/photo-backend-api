@@ -132,13 +132,24 @@ function findFileRecursive(root, targetName) {
 app.get("/thumbnails/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
+    console.log(`🔍 Looking up thumbnail for ID: ${id}`);
+
     const row = await db.get("SELECT filename FROM photos WHERE id = ?", [id]);
-    if (!row) return res.sendStatus(404);
+    if (!row) {
+      console.log(`❌ No database record found for ID: ${id}`);
+      return res.sendStatus(404);
+    }
 
     const thumbName = `${row.filename}.thumb.jpg`;
-    const filePath = findFileRecursive("G:/Photos", thumbName);
-    if (!filePath) return res.sendStatus(404);
+    console.log(`📁 Looking for thumbnail file: ${thumbName}`);
 
+    const filePath = findFileRecursive("G:/Photos", thumbName);
+    if (!filePath) {
+      console.log(`❌ Thumbnail file not found: ${thumbName}`);
+      return res.sendStatus(404);
+    }
+
+    console.log(`✅ Found thumbnail: ${filePath}`);
     res.sendFile(path.resolve(filePath));
   } catch (err) {
     console.error("❌ Thumbnail error:", err);
