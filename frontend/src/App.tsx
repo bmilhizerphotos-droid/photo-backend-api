@@ -16,6 +16,7 @@ function App() {
   const [modalLoading, setModalLoading] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [avatarError, setAvatarError] = useState(false);
 
   const observer = useRef<IntersectionObserver | null>(null);
   const LIMIT = 50;
@@ -66,6 +67,7 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setAuthLoading(false);
+      setAvatarError(false); // Reset avatar error on user change
     });
 
     return () => unsubscribe();
@@ -174,12 +176,18 @@ function App() {
 
                   {/* User Info & Sign Out */}
                   <div className="flex items-center space-x-3">
-                    {user.photoURL && (
+                    {user.photoURL && !avatarError ? (
                       <img
                         src={user.photoURL}
                         alt={user.displayName || 'User'}
                         className="w-8 h-8 rounded-full"
+                        onError={() => setAvatarError(true)}
                       />
+                    ) : (
+                      // Fallback avatar
+                      <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm font-medium">
+                        {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                      </div>
                     )}
                     <span className="text-sm text-gray-700">{user.displayName}</span>
                     <button
