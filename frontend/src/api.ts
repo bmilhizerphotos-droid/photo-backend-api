@@ -1,53 +1,86 @@
 /**
- * Configuration for the API client.
- * Uses localhost in development and the production API domain in production.
+ * API service for Family Photo Gallery
+ * Google Photos-style masonry gallery frontend
  */
 
-// For development, always use local backend
-// TODO: In production, this should be "https://api.milhizerfamilyphotos.org"
-const rawBase = "http://127.0.0.1:3001";
+import { getAuth } from 'firebase/auth';
 
-export const API_BASE = rawBase.replace(/\/$/, "");
+export const API_BASE = "https://photos.milhizerfamilyphotos.org";
 
 /**
- * Fetches an initial list of photos from the server.
- * Supports both API response shapes:
- *  - array of photos (current backend)
- *  - { photos: [...] } (older/alternate clients)
+ * Photo interface matching backend API response
  */
-export async function fetchPhotos(limit = 20, offset = 0) {
-  const url = new URL("/api/photos", API_BASE);
-  url.searchParams.set("limit", limit.toString());
-  url.searchParams.set("offset", offset.toString());
-
-  const res = await fetch(url.toString(), {
-    method: "GET",
-    credentials: "include", // REQUIRED for Cloudflare Access session cookies
-  });
-
-  if (!res.ok) {
-    throw new Error(
-      `Failed to fetch photos (${res.status}). Ensure the backend is running and Cloudflare Access is allowing your session.`
-    );
-  }
-
-  const data = await res.json();
-
-  if (Array.isArray(data)) return data;
-  return data.photos ?? [];
+export interface Photo {
+  id: number;
+  filename: string;
+  thumbnailUrl: string;
+  fullUrl: string;
 }
 
 /**
- * Helper to get the full photo URL for <img> tags.
- * Resolves relative paths to the correct backend address.
+ * Fetches photos from the backend API
  */
-export const getPhotoUrl = (p: string) => {
-  if (!p) return "";
-  if (p.startsWith("http")) return p;
-  try {
-    return new URL(p, API_BASE).toString();
-  } catch (e) {
-    // Fallback to simple concatenation if URL construction fails
-    return `${API_BASE}${p.startsWith("/") ? "" : "/"}${p}`;
+export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
+  const auth = getAuth();
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("User not authenticated");
   }
+
+  const idToken = await user.getIdToken();
+
+  const url = new URL("/api/photos", API_BASE);
+  url.searchParams.set("offset", offset.toString());
+  url.searchParams.set("limit", limit.toString());
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${idToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  return Array.isArray(data) ? data : data.photos ?? [];
+}
+
+/**
+ * Gets authenticated image URL with Firebase ID token
+ */
+export const getAuthenticatedImageUrl = async (imagePath: string): Promise<string> => {
+  if (!imagePath) return "";
+
+  if (imagePath.startsWith("http")) return imagePath;
+
+  const auth = getAuth();
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("User not authenticated");
+  }
+
+  const idToken = await user.getIdToken();
+
+  const url = new URL("/api/photo-file", API_BASE);
+  url.searchParams.set("path", encodeURIComponent(imagePath));
+  url.searchParams.set("token", idToken);
+
+  return url.toString();
+};
+
+/**
+ * Preloads an image with authentication
+ */
+export const preloadImage = (src: string): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = reject;
+    img.src = src;
+  });
 };
