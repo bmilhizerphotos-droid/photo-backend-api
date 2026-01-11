@@ -84,11 +84,18 @@ function App() {
 
   // Load photos with infinite scroll
   const loadPhotos = useCallback(async () => {
-    if (loading || !hasMore || currentView !== 'photos' || !user) return;
+    console.log('loadPhotos called:', { loading, hasMore, currentView, user: !!user, offset });
+
+    if (loading || !hasMore || currentView !== 'photos' || !user) {
+      console.log('loadPhotos blocked by condition:', { loading, hasMore, currentView, user: !!user });
+      return;
+    }
 
     setLoading(true);
     try {
+      console.log('Calling fetchPhotos with offset:', offset, 'limit:', LIMIT);
       const data = await fetchPhotos(offset, LIMIT);
+      console.log('fetchPhotos returned:', data.length, 'photos');
 
       if (data.length < LIMIT) {
         setHasMore(false);
@@ -101,7 +108,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [loading, hasMore, currentView]);
+  }, [loading, hasMore, currentView, user, offset]);
 
   // Handle redirect authentication result (combined with auth state listener)
 
