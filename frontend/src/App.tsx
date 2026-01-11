@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchPhotos, getAuthenticatedImageUrl, Photo, preloadImage } from './api';
-import { auth, signInWithGoogle, signInWithGoogleRedirect, signOutUser } from './firebase';
+import { auth, signInWithGoogle, completeRedirectSignIn, signOutUser } from './firebase';
 import { getRedirectResult } from 'firebase/auth';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
@@ -19,37 +19,20 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [avatarError, setAvatarError] = useState(false);
   const [avatarLoading, setAvatarLoading] = useState(false);
-  const [redirecting, setRedirecting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const observer = useRef<IntersectionObserver | null>(null);
   const LIMIT = 50;
 
-  // Authentication handlers
+  // Authentication handler - uses redirect as primary robust method
   const handleSignIn = async () => {
-    setRedirecting(true);
+    setAuthError(null);
     try {
       await signInWithGoogle();
-      setRedirecting(false);
+      // signInWithGoogle() handles redirect fallback internally if popup fails
     } catch (error: any) {
-      console.error('Popup authentication failed:', error.message);
-
-      // If popup fails due to browser security policies, try redirect
-      if (error.message.includes('Cross-Origin') || error.message.includes('blocked') || error.code === 'auth/popup-blocked') {
-        console.log('Trying redirect authentication...');
-        alert('🔄 Redirecting to Google for authentication...\n\nPlease sign in and you\'ll be redirected back automatically.');
-        try {
-          await signInWithGoogleRedirect();
-          // This will redirect the page, so this code won't execute
-        } catch (redirectError: any) {
-          console.error('Redirect authentication also failed:', redirectError);
-          setRedirecting(false);
-          alert('Authentication failed. Please try:\n1. Use an incognito/private window\n2. Disable popup blockers temporarily\n3. Use a different browser (Chrome recommended)');
-        }
-      } else {
-        // Other errors (user cancelled, etc.)
-        console.log('Authentication cancelled or other error');
-        setRedirecting(false);
-      }
+      // Any error that reaches here is a real authentication failure
+      setAuthError(String(error));
     }
   };
 
@@ -85,31 +68,22 @@ function App() {
     }
   }, [loading, hasMore, currentView]);
 
-  // Handle redirect authentication result
-  useEffect(() => {
-    const handleRedirectResult = async () => {
-      try {
-        const result = await getRedirectResult(auth);
-        if (result?.user) {
-          console.log('Redirect authentication successful for:', result.user.displayName);
-        }
-      } catch (error) {
-        // Only log actual errors, not "null" results
-        if (error && typeof error === 'object' && 'code' in error) {
-          console.error('Redirect authentication error:', error);
-        }
-      }
-    };
-
-    handleRedirectResult();
-  }, []);
+  // Handle redirect authentication result (combined with auth state listener)
 
   // Authentication state listener
   useEffect(() => {
+    // Finish redirect flow if we came back from Google
+    completeRedirectSignIn().catch((e) => {
+      // Only set error for actual auth errors, not null results
+      if (e && typeof e === 'object' && 'code' in e) {
+        setAuthError(String(e));
+      }
+    });
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setAuthLoading(false);
-      setRedirecting(false); // Reset redirecting state
+      setAuthError(null); // Clear auth errors on successful auth
       setAvatarError(false); // Reset avatar error on user change
       setAvatarLoading(true);
 
@@ -216,30 +190,6 @@ function App() {
       );
     }
 
-    if (redirecting) {
-      return (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-          <div className="max-w-md">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mx-auto mb-6"></div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">
-              Redirecting to Google...
-            </h2>
-            <p className="text-gray-600 mb-4">
-              You'll be redirected to Google to sign in, then brought back here automatically.
-            </p>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-800">
-                <strong>What to expect:</strong><br/>
-                1. Google sign-in page opens<br/>
-                2. Sign in with your Google account<br/>
-                3. You'll be redirected back automatically<br/>
-                4. Your photos will load!
-              </p>
-            </div>
-          </div>
-        </div>
-      );
-    }
 
     if (!user) {
       return (
@@ -252,22 +202,29 @@ function App() {
             <p className="text-gray-600 mb-8">
               Sign in with Google to view and manage your family photo collection.
             </p>
-            <button
-              onClick={handleSignIn}
-              disabled={redirecting}
-              className="bg-blue-600 text-white px-8 py-3 rounded-lg text-lg font-medium hover:bg-blue-700 disabled:bg-blue-400 transition-colors flex items-center space-x-3 mx-auto"
-            >
-              <svg className="w-6 h-6" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-              </svg>
-              <span>Sign In with Google</span>
-            </button>
-            <p className="text-sm text-gray-500 mt-4 text-center">
-              Uses popup authentication (redirects if blocked by browser)
-            </p>
+              <button
+                onClick={handleSignIn}
+                className="bg-blue-600 text-white px-8 py-3 rounded-lg text-lg font-medium hover:bg-blue-700 transition-colors flex items-center space-x-3 mx-auto"
+              >
+                <svg className="w-6 h-6" viewBox="0 0 24 24">
+                  <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                <span>Sign In with Google</span>
+              </button>
+              <p className="text-sm text-gray-500 mt-4 text-center">
+                Robust authentication (works in all browsers)
+              </p>
+              {authError && (
+                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-sm text-red-800">
+                    <strong>Authentication Error:</strong><br/>
+                    {authError}
+                  </p>
+                </div>
+              )}
           </div>
         </div>
       );

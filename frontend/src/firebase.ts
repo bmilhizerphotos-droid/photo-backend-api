@@ -8,6 +8,7 @@ import {
   signInWithRedirect,
   getRedirectResult,
   signOut,
+  type UserCredential,
 } from "firebase/auth";
 
 // Firebase configuration (public-safe)
@@ -27,22 +28,28 @@ const app = initializeApp(firebaseConfig);
 // Initialize Auth
 export const auth = getAuth(app);
 
-// Google provider
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-  prompt: 'select_account'
-});
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ prompt: "select_account" });
 
-/**
- * Sign in using Google popup (may fail in strict browsers)
- */
-export async function signInWithGoogle() {
+export async function completeRedirectSignIn(): Promise<UserCredential | null> {
+  // Call once on app load to finish a redirect flow
+  return await getRedirectResult(auth);
+}
+
+export async function signInWithGoogle(): Promise<UserCredential> {
   try {
-    return await signInWithPopup(auth, googleProvider);
-  } catch (error: any) {
-    console.warn('Popup authentication failed:', error.message);
-    console.log('Try using redirect authentication instead');
-    throw error;
+    return await signInWithPopup(auth, provider);
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code;
+
+    // COOP can cause Firebase to think the popup was closed.
+    if (code === "auth/popup-closed-by-user" || code === "auth/popup-blocked") {
+      await signInWithRedirect(auth, provider);
+      // Redirect happens; this promise won't resolve in the current page.
+      return new Promise<UserCredential>(() => {});
+    }
+
+    throw err;
   }
 }
 
