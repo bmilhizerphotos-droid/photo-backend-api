@@ -249,12 +249,13 @@ function App() {
                 rowGap: '24px'
               }}
             >
-              {photos.map((photo) => (
-                <div
-                  key={photo.id}
-                  className="break-inside-avoid cursor-pointer group"
-                  onClick={() => handlePhotoClick(photo)}
-                >
+              {photos.map((photo) => {
+                return (
+                  <div
+                    key={photo.id}
+                    className="break-inside-avoid cursor-pointer group"
+                    onClick={() => handlePhotoClick(photo)}
+                  >
                     <div className="relative overflow-hidden rounded-lg bg-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200">
                       <img
                         src={photo.thumbnailUrl}
