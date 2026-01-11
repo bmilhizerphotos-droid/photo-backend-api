@@ -23,13 +23,12 @@ export interface Photo {
  * Fetches photos from the backend API
  */
 export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
-  const user = auth.currentUser;
-
-  if (!user) {
-    throw new Error("User not authenticated");
-  }
-
-  const idToken = await user.getIdToken();
+  // Temporarily disable authentication for testing
+  // const user = auth.currentUser;
+  // if (!user) {
+  //   throw new Error("User not authenticated");
+  // }
+  // const idToken = await user.getIdToken();
 
   const url = new URL("/api/photos", API_BASE);
   url.searchParams.set("offset", offset.toString());
@@ -37,9 +36,10 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
 
   const res = await fetch(url.toString(), {
     method: "GET",
-    headers: {
-      "Authorization": `Bearer ${idToken}`,
-    },
+    // Temporarily remove auth header for testing
+    // headers: {
+    //   "Authorization": `Bearer ${idToken}`,
+    // },
   });
 
   if (!res.ok) {
