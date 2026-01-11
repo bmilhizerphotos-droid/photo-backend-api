@@ -1,10 +1,45 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchPhotos, getAuthenticatedImageUrl, Photo, preloadImage } from './api';
 import { auth, signInWithGoogle, completeRedirectSignIn, signOutUser } from './firebase';
 import { getRedirectResult } from 'firebase/auth';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
 type ViewType = 'photos' | 'people' | 'memories' | 'shared';
+
+type FullImageProps = {
+  src: string;
+  alt?: string;
+  fallbackSrc?: string;
+  className?: string;
+};
+
+function FullImage({ src, alt = "", fallbackSrc, className }: FullImageProps) {
+  const [currentSrc, setCurrentSrc] = useState(src);
+  const handledRef = useRef(false);
+
+  // Keep state in sync when src changes from parent.
+  // Important: reset handledRef so a new image can error once again.
+  useMemo(() => {
+    handledRef.current = false;
+    setCurrentSrc(src);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
+  const onError = useCallback(() => {
+    if (handledRef.current) return;
+    handledRef.current = true;
+
+    if (fallbackSrc && fallbackSrc !== currentSrc) {
+      setCurrentSrc(fallbackSrc);
+      return;
+    }
+
+    // If no fallback, stop changing state (prevents infinite loop)
+    // You can optionally hide the image via a CSS class or show a placeholder.
+  }, [fallbackSrc, currentSrc]);
+
+  return <img src={currentSrc} alt={alt} className={className} onError={onError} />;
+}
 
 function App() {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -421,9 +456,10 @@ function App() {
             {/* Full-Size Image */}
             {!modalLoading && selectedPhotoUrl && (
               <div className="bg-white rounded-lg overflow-hidden shadow-2xl max-w-5xl max-h-[90vh]">
-                <img
+                <FullImage
                   src={selectedPhotoUrl}
                   alt={selectedPhoto.filename}
+                  fallbackSrc={selectedPhoto.thumbnailUrl}
                   className="w-full h-auto max-h-[80vh] object-contain"
                 />
 
