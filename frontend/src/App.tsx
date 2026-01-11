@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchPhotos, getAuthenticatedImageUrl, Photo, preloadImage } from './api';
-import { auth, signInWithGoogle, signOutUser } from './firebase';
+import { auth, signInWithGoogle, signInWithGoogleRedirect, signOutUser } from './firebase';
 import { getRedirectResult } from 'firebase/auth';
 import { onAuthStateChanged, User } from 'firebase/auth';
 
@@ -30,9 +30,19 @@ function App() {
     } catch (error: any) {
       console.error('Popup authentication failed:', error.message);
 
-      // If popup fails due to browser policies, show alternative
-      if (error.message.includes('Cross-Origin') || error.message.includes('blocked')) {
-        alert('Popup authentication was blocked by browser security policies.\n\nPlease try:\n1. Disable browser security extensions temporarily\n2. Use an incognito/private window\n3. Or use a different browser (Chrome recommended)');
+      // If popup fails due to browser security policies, try redirect
+      if (error.message.includes('Cross-Origin') || error.message.includes('blocked') || error.code === 'auth/popup-blocked') {
+        console.log('Trying redirect authentication...');
+        try {
+          await signInWithGoogleRedirect();
+          // Page will redirect to Google, then back to our app
+        } catch (redirectError: any) {
+          console.error('Redirect authentication also failed:', redirectError);
+          alert('Authentication failed. Please try:\n1. Use an incognito/private window\n2. Disable popup blockers temporarily\n3. Use a different browser (Chrome recommended)');
+        }
+      } else {
+        // Other errors (user cancelled, etc.)
+        console.log('Authentication cancelled or other error');
       }
     }
   };
@@ -75,10 +85,13 @@ function App() {
       try {
         const result = await getRedirectResult(auth);
         if (result?.user) {
-          console.log('Redirect authentication successful');
+          console.log('Redirect authentication successful for:', result.user.displayName);
         }
       } catch (error) {
-        console.error('Redirect authentication error:', error);
+        // Only log actual errors, not "null" results
+        if (error && typeof error === 'object' && 'code' in error) {
+          console.error('Redirect authentication error:', error);
+        }
       }
     };
 
@@ -291,6 +304,9 @@ function App() {
                 </svg>
                 <span>Sign In with Google</span>
               </button>
+              <p className="text-sm text-gray-500 mt-4 text-center">
+                Uses popup authentication (may redirect if blocked by browser)
+              </p>
             </div>
           </div>
         ) : currentView === 'photos' ? (

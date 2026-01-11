@@ -5,6 +5,8 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
 } from "firebase/auth";
 
@@ -40,6 +42,31 @@ export async function signInWithGoogle() {
   } catch (error: any) {
     console.warn('Popup authentication failed:', error.message);
     console.log('Try using redirect authentication instead');
+    throw error;
+  }
+}
+
+/**
+ * Sign in using Google redirect (works in all browsers)
+ */
+export async function signInWithGoogleRedirect() {
+  try {
+    await signInWithRedirect(auth, googleProvider);
+  } catch (error: any) {
+    console.error('Redirect authentication failed:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get the result of a redirect sign-in
+ */
+export async function getGoogleRedirectResult() {
+  try {
+    const result = await getRedirectResult(auth);
+    return result;
+  } catch (error: any) {
+    console.error('Getting redirect result failed:', error);
     throw error;
   }
 }
