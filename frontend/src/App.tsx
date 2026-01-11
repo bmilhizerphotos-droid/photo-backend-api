@@ -249,9 +249,9 @@ function App() {
                 rowGap: '24px'
               }}
             >
-              {photos.map((photo, index) => (
+              {photos.map((photo) => (
                 <div
-                  key={`${photo.id}-${index}`}
+                  key={photo.id}
                   className="break-inside-avoid cursor-pointer group"
                   onClick={() => handlePhotoClick(photo)}
                 >
