@@ -1,6 +1,7 @@
 // FILE: server.js
 import express from "express";
 import fs from "fs";
+import fsPromises from "fs/promises";
 import path from "path";
 import cors from "cors";
 import sharp from "sharp";
@@ -31,22 +32,6 @@ const allowedOrigins = [
   "http://localhost:5174",
   "http://127.0.0.1:5174",
 ];
-
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-  }
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-  res.header("Access-Control-Allow-Credentials", "true");
-
-  if (req.method === "OPTIONS") return res.sendStatus(200);
-  next();
-});
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
@@ -80,8 +65,7 @@ async function authenticateToken(req, res, next) {
     console.log(`✅ Auth success: ${decodedToken.email}`);
     next();
   } catch (error) {
-    console.error("❌ Token verification failed:", error);
-    console.error(`   Received token: ${token.substring(0, 50)}...`);
+    console.error("❌ Token verification failed:", error.code || error.message);
     return res.status(403).json({ error: "Forbidden: Invalid token" });
   }
 }
@@ -118,7 +102,41 @@ function isPathWithinRoot(filePath) {
   return resolvedPath.startsWith(resolvedRoot + path.sep) || resolvedPath === resolvedRoot;
 }
 
-function findFileRecursive(root, targetName) {
+// ---------------- FILE PATH CACHE ----------------
+// Cache file paths to avoid repeated directory traversals
+const filePathCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_SIZE = 10000;
+
+function getCachedPath(filename) {
+  const entry = filePathCache.get(filename.toLowerCase());
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    filePathCache.delete(filename.toLowerCase());
+    return null;
+  }
+  return entry.path;
+}
+
+function setCachedPath(filename, filePath) {
+  // Evict oldest entries if cache is full
+  if (filePathCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = filePathCache.keys().next().value;
+    filePathCache.delete(firstKey);
+  }
+  filePathCache.set(filename.toLowerCase(), { path: filePath, timestamp: Date.now() });
+}
+
+// Async file search with caching
+async function findFileAsync(root, targetName) {
+  const targetLower = String(targetName).toLowerCase();
+
+  // Check cache first
+  const cached = getCachedPath(targetLower);
+  if (cached && fs.existsSync(cached)) {
+    return cached;
+  }
+
   // Security: Ensure we only search within PHOTO_ROOT
   const resolvedRoot = path.resolve(root);
   if (!isPathWithinRoot(resolvedRoot)) {
@@ -127,29 +145,33 @@ function findFileRecursive(root, targetName) {
   }
 
   const stack = [resolvedRoot];
-  const targetLower = String(targetName).toLowerCase();
 
   while (stack.length > 0) {
     const dir = stack.pop();
     try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const entries = await fsPromises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         // Security: Double-check each path stays within bounds
         if (!isPathWithinRoot(fullPath)) continue;
 
-        if (entry.isDirectory()) stack.push(fullPath);
-        else if (entry.name.toLowerCase() === targetLower) return fullPath;
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+        } else if (entry.name.toLowerCase() === targetLower) {
+          // Cache the found path
+          setCachedPath(targetLower, fullPath);
+          return fullPath;
+        }
       }
     } catch {
-      // ignore
+      // ignore permission errors
     }
   }
   return null;
 }
 
-function getPhotoPathOr404(res, filename) {
-  const filePath = findFileRecursive(PHOTO_ROOT, filename);
+async function getPhotoPathOr404Async(res, filename) {
+  const filePath = await findFileAsync(PHOTO_ROOT, filename);
   if (!filePath) {
     res.sendStatus(404);
     return null;
@@ -168,8 +190,8 @@ function getPhotoPathOr404(res, filename) {
 // Important change: fullUrl now points at /display/:id (always JPEG)
 app.get("/api/photos", authenticateToken, async (req, res) => {
   try {
-    const limit = Number(req.query.limit || 50);
-    const offset = Number(req.query.offset || 0);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
 
     const rows = await dbAll(
       `
@@ -232,7 +254,7 @@ app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
 
       if (!filePath || filePath.includes('.thumb.') || !fs.existsSync(filePath)) {
         console.log(`⚠️  Searching for FULL image ID ${id}...`);
-        filePath = findFileRecursive(PHOTO_ROOT, row.filename);
+        filePath = await findFileAsync(PHOTO_ROOT, row.filename);
       }
 
       if (!filePath || !fs.existsSync(filePath)) {
@@ -269,7 +291,7 @@ app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
 
       if (!filePath || !fs.existsSync(filePath)) {
         const thumbName = `${row.filename}.thumb.jpg`;
-        filePath = findFileRecursive(PHOTO_ROOT, thumbName);
+        filePath = await findFileAsync(PHOTO_ROOT, thumbName);
       }
 
       if (!filePath || !fs.existsSync(filePath)) {
@@ -323,7 +345,7 @@ app.get(["/display/:id", "/image/:id"], authenticateToken, async (req, res) => {
     if (!filePath || !fs.existsSync(filePath)) {
       console.log(`⚠️  Path not in DB or doesn't exist for ID ${id}, searching for ORIGINAL file...`);
       // Search for ORIGINAL file, not thumbnail
-      filePath = findFileRecursive(PHOTO_ROOT, row.filename);
+      filePath = await findFileAsync(PHOTO_ROOT, row.filename);
     }
     
     if (!filePath || !fs.existsSync(filePath)) {
@@ -398,7 +420,7 @@ app.get("/photos/:id", authenticateToken, async (req, res) => {
     const row = await dbGet("SELECT filename FROM photos WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "Photo not found" });
 
-    const filePath = getPhotoPathOr404(res, row.filename);
+    const filePath = await getPhotoPathOr404Async(res, row.filename);
     if (!filePath) return;
 
     res.sendFile(filePath);
@@ -459,11 +481,11 @@ app.post("/api/photos/bulk", authenticateToken, async (req, res) => {
 
         for (const photoId of photoIds) {
           try {
-            await dbRun(
+            const result = await dbRun(
               "INSERT OR IGNORE INTO photo_albums (photo_id, album_id) VALUES (?, ?)",
               [photoId, albumId]
             );
-            updated++;
+            result.changes > 0 ? updated++ : skipped++;
           } catch (e) {
             errors.push(`Failed to add ${photoId} to album: ${e.message}`);
           }
