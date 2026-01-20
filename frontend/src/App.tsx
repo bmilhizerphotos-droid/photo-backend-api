@@ -73,14 +73,23 @@ function AppContent() {
 
     // Normal click - open modal
     setSelectedPhoto(photo);
-    setModalLoading(false);
+    setModalLoading(true);
+    setSelectedPhotoUrl('');
 
     try {
       const authenticatedUrl = await getAuthenticatedImageUrl(photo.fullUrl);
       setSelectedPhotoUrl(authenticatedUrl);
     } catch (err) {
       console.error("Error loading full-size image:", err);
-      setSelectedPhotoUrl(photo.fullUrl); // Fallback to original URL
+      // Try to authenticate the thumbnail URL as fallback
+      try {
+        const fallbackUrl = await getAuthenticatedImageUrl(photo.thumbnailUrl);
+        setSelectedPhotoUrl(fallbackUrl);
+      } catch {
+        setSelectedPhotoUrl(photo.fullUrl);
+      }
+    } finally {
+      setModalLoading(false);
     }
   }, [toggleSelection]);
 

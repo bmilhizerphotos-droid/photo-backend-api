@@ -116,7 +116,6 @@ export function ImageModal({ photo, imageUrl, loading, onClose }: ImageModalProp
             <FullImage
               src={imageUrl}
               alt={photo.filename}
-              fallbackSrc={photo.thumbnailUrl}
               className="w-full h-auto max-h-[80vh] object-contain"
             />
 
