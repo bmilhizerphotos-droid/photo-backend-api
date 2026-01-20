@@ -33,7 +33,11 @@ const allowedOrigins = [
   "http://127.0.0.1:5174",
 ];
 
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'Cache-Control'],
+}));
 app.use(express.json());
 
 // ---------------- AUTHENTICATION MIDDLEWARE ----------------
