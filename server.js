@@ -1,70 +1,95 @@
+// FILE: server.js
 import express from "express";
 import fs from "fs";
 import path from "path";
 import cors from "cors";
-import db from "./db.js";
+import sharp from "sharp";
+import { dbGet, dbAll, dbRun } from "./db.js";
+import admin from "firebase-admin";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Initialize Firebase Admin
+const serviceAccount = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "firebase-service-account.json"), "utf8")
+);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
+const PHOTO_ROOT = process.env.PHOTO_ROOT || "G:/Photos";
 
-// --- 1. MANUAL HEADER INJECTION (The "Brute Force" Fix) ---
-// This ensures headers are set even if the CORS package is bypassed.
+const allowedOrigins = [
+  "https://photos.milhizerfamilyphotos.org",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5174",
+];
+
 app.use((req, res, next) => {
-  const allowedOrigins = [
-    'https://photos.milhizerfamilyphotos.org',  // Production
-    'http://localhost:5173',                    // Development frontend
-    'http://127.0.0.1:5173'                     // Alternative localhost
-  ];
-
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
+  if (origin && allowedOrigins.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
   }
-
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+  );
   res.header("Access-Control-Allow-Credentials", "true");
 
-  // Immediately respond to the browser's "preflight" handshake
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-// --- 2. STANDARD CORS MIDDLEWARE ---
-// Allow localhost for development, production domain for production
-const allowedOrigins = [
-  'https://photos.milhizerfamilyphotos.org',  // Production
-  'http://localhost:5173',                    // Development frontend
-  'http://127.0.0.1:5173'                     // Alternative localhost
-];
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    } else {
-      return callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  optionsSuccessStatus: 200
-};
-app.use(cors(corsOptions));
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
-// Database is imported from db.js
+// ---------------- AUTHENTICATION MIDDLEWARE ----------------
+async function authenticateToken(req, res, next) {
+  // Check for token in Authorization header first
+  let token = null;
+  const authHeader = req.headers.authorization;
+  
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.substring(7);
+  } else if (req.query.token) {
+    // For image requests, accept token as query parameter
+    token = req.query.token;
+  }
+  
+  if (!token) {
+    console.log(`⚠️  No token provided for ${req.method} ${req.path}`);
+    return res.status(401).json({ error: "Unauthorized: No token provided" });
+  }
+  
+  // Log authentication attempt (no token details in production)
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`🔐 Authenticating ${req.method} ${req.path}`);
+  }
 
-// --- 4. API ROUTES ---
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = decodedToken; // Attach user info to request
+    console.log(`✅ Auth success: ${decodedToken.email}`);
+    next();
+  } catch (error) {
+    console.error("❌ Token verification failed:", error);
+    console.error(`   Received token: ${token.substring(0, 50)}...`);
+    return res.status(403).json({ error: "Forbidden: Invalid token" });
+  }
+}
 
-// ---------------- HEALTH CHECK ----------------
+// ---------------- HEALTH CHECK (NO AUTH REQUIRED) ----------------
 app.get("/health", async (req, res) => {
   try {
-    await db.get("SELECT 1");
+    await dbGet("SELECT 1");
     res.json({
       status: "ok",
       uptimeSeconds: Math.floor(process.uptime()),
@@ -72,21 +97,94 @@ app.get("/health", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Health check failed:", err);
-    res.status(500).json({
-      status: "error",
-      message: "Database unreachable",
-    });
+    res.status(500).json({ status: "error", message: "Database unreachable" });
   }
 });
 
-// List all photos
-app.get("/api/photos", async (req, res) => {
+// ---------------- UTIL ----------------
+function validatePhotoId(id) {
+  const numId = Number(id);
+  if (!Number.isInteger(numId) || numId <= 0) {
+    return null;
+  }
+  return numId;
+}
+
+// Security: Validate that a path is within the allowed PHOTO_ROOT directory
+function isPathWithinRoot(filePath) {
+  if (!filePath) return false;
+  const resolvedPath = path.resolve(filePath);
+  const resolvedRoot = path.resolve(PHOTO_ROOT);
+  return resolvedPath.startsWith(resolvedRoot + path.sep) || resolvedPath === resolvedRoot;
+}
+
+function findFileRecursive(root, targetName) {
+  // Security: Ensure we only search within PHOTO_ROOT
+  const resolvedRoot = path.resolve(root);
+  if (!isPathWithinRoot(resolvedRoot)) {
+    console.error(`❌ Security: Attempted to search outside PHOTO_ROOT: ${root}`);
+    return null;
+  }
+
+  const stack = [resolvedRoot];
+  const targetLower = String(targetName).toLowerCase();
+
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        // Security: Double-check each path stays within bounds
+        if (!isPathWithinRoot(fullPath)) continue;
+
+        if (entry.isDirectory()) stack.push(fullPath);
+        else if (entry.name.toLowerCase() === targetLower) return fullPath;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function getPhotoPathOr404(res, filename) {
+  const filePath = findFileRecursive(PHOTO_ROOT, filename);
+  if (!filePath) {
+    res.sendStatus(404);
+    return null;
+  }
+  const resolved = path.resolve(filePath);
+  // Security: Final validation before returning
+  if (!isPathWithinRoot(resolved)) {
+    console.error(`❌ Security: Path traversal blocked: ${resolved}`);
+    res.sendStatus(404);
+    return null;
+  }
+  return resolved;
+}
+
+// ---------------- LIST PHOTOS (PROTECTED) ----------------
+// Important change: fullUrl now points at /display/:id (always JPEG)
+app.get("/api/photos", authenticateToken, async (req, res) => {
   try {
     const limit = Number(req.query.limit || 50);
     const offset = Number(req.query.offset || 0);
 
-    const rows = await db.all(
-      "SELECT id, filename FROM photos LIMIT ? OFFSET ?",
+    const rows = await dbAll(
+      `
+      SELECT
+        p.id,
+        p.filename,
+        p.is_favorite,
+        p.created_at,
+        GROUP_CONCAT(pa.album_id) as album_ids
+      FROM photos p
+      LEFT JOIN photo_albums pa ON p.id = pa.photo_id
+      GROUP BY p.id
+      ORDER BY p.id
+      LIMIT ? OFFSET ?
+    `,
       [limit, offset]
     );
 
@@ -95,94 +193,308 @@ app.get("/api/photos", async (req, res) => {
         id: r.id,
         filename: r.filename,
         thumbnailUrl: `/thumbnails/${r.id}`,
-        fullUrl: `/photos/${r.id}`,
+        fullUrl: `/thumbnails/${r.id}?full=true`, // Use thumbnails endpoint with full=true
+        isFavorite: Boolean(r.is_favorite),
+        albumIds: r.album_ids ? r.album_ids.split(",").filter(Boolean).map(Number) : [],
+        createdAt: r.created_at,
       }))
     );
   } catch (err) {
-    console.error("❌ DB error:", err);
+    console.error("❌ /api/photos error:", err);
     res.status(500).json({ error: "Database error" });
   }
 });
 
-// ---------------- UTIL ----------------
-function findFileRecursive(root, targetName) {
-  const stack = [root];
-  const targetLower = targetName.toLowerCase();
-
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          stack.push(fullPath);
-        } else if (entry.name.toLowerCase() === targetLower) {
-          return fullPath;
-        }
-      }
-    } catch {
-      // ignore permission errors
-    }
-  }
-  return null;
-}
-
-// ---------------- THUMBNAILS ----------------
-app.get("/thumbnails/:id", async (req, res) => {
+// ---------------- THUMBNAILS (PROTECTED) ----------------
+app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    console.log(`🔍 Looking up thumbnail for ID: ${id}`);
-
-    const row = await db.get("SELECT filename FROM photos WHERE id = ?", [id]);
-    if (!row) {
-      console.log(`❌ No database record found for ID: ${id}`);
-      return res.sendStatus(404);
+    const id = validatePhotoId(req.params.id);
+    if (id === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
     }
+    
+    const row = await dbGet("SELECT filename, full_path, thumbnail_path FROM photos WHERE id = ?", [id]);
+    if (!row) return res.status(404).json({ error: "Photo not found" });
 
-    const thumbName = `${row.filename}.thumb.jpg`;
-    console.log(`📁 Looking for thumbnail file: ${thumbName}`);
+    // Check if full-size image is requested via query parameter
+    const serveFull = req.query.full === 'true';
 
-    const filePath = findFileRecursive("G:/Photos", thumbName);
-    if (!filePath) {
-      console.log(`❌ Thumbnail file not found: ${thumbName}`);
-      return res.sendStatus(404);
+    let filePath;
+    if (serveFull) {
+      // Serve full-size image
+      filePath = row.full_path;
+
+      // Security: Validate database path is within PHOTO_ROOT
+      if (filePath && !isPathWithinRoot(filePath)) {
+        console.error(`❌ Security: Invalid full_path in database for ID ${id}`);
+        filePath = null;
+      }
+
+      if (!filePath || filePath.includes('.thumb.') || !fs.existsSync(filePath)) {
+        console.log(`⚠️  Searching for FULL image ID ${id}...`);
+        filePath = findFileRecursive(PHOTO_ROOT, row.filename);
+      }
+
+      if (!filePath || !fs.existsSync(filePath)) {
+        console.error(`❌ Full image not found for ID ${id}`);
+        return res.status(404).json({ error: "Image not found" });
+      }
+      
+      console.log(`✅ Serving FULL image ID ${id}: ${filePath}`);
+      
+      // Use Sharp to process full image
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
+      
+      const maxW = Number(req.query.w || 2400);
+      
+      sharp(filePath)
+        .rotate()
+        .resize({ width: maxW, withoutEnlargement: true })
+        .jpeg({ quality: 85, progressive: true })
+        .on("error", (e) => {
+          console.error(`❌ Sharp error for ID ${id}:`, e.message);
+          if (!res.headersSent) res.status(500).json({ error: "Failed to process image" });
+        })
+        .pipe(res);
+    } else {
+      // Serve thumbnail (original behavior)
+      filePath = row.thumbnail_path;
+
+      // Security: Validate database path is within PHOTO_ROOT
+      if (filePath && !isPathWithinRoot(filePath)) {
+        console.error(`❌ Security: Invalid thumbnail_path in database for ID ${id}`);
+        filePath = null;
+      }
+
+      if (!filePath || !fs.existsSync(filePath)) {
+        const thumbName = `${row.filename}.thumb.jpg`;
+        filePath = findFileRecursive(PHOTO_ROOT, thumbName);
+      }
+
+      if (!filePath || !fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Thumbnail not found" });
+      }
+
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      
+      const stream = fs.createReadStream(filePath);
+      stream.on("error", (err) => {
+        console.error(`❌ Stream error for thumbnail ID ${id}:`, err.message);
+        if (!res.headersSent) res.status(500).json({ error: "Failed to load thumbnail" });
+      });
+      stream.pipe(res);
     }
-
-    console.log(`✅ Found thumbnail: ${filePath}`);
-    res.sendFile(path.resolve(filePath));
   } catch (err) {
-    console.error("❌ Thumbnail error:", err);
-    res.sendStatus(500);
+    console.error("❌ Thumbnail/Image error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to load image" });
   }
 });
 
-// ---------------- FULL PHOTOS ----------------
-app.get("/photos/:id", async (req, res) => {
+// ---------------- DISPLAY JPEG (NEW, PROTECTED) ----------------
+// Always returns a browser-friendly JPEG for modal viewing.
+// Added /image route as alias to bypass Cloudflare cache issues
+app.get(["/display/:id", "/image/:id"], authenticateToken, async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    const row = await db.get("SELECT filename FROM photos WHERE id = ?", [id]);
-    if (!row) return res.sendStatus(404);
+    const id = validatePhotoId(req.params.id);
+    if (id === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+    
+    const row = await dbGet("SELECT filename, full_path, thumbnail_path FROM photos WHERE id = ?", [id]);
+    if (!row) return res.status(404).json({ error: "Photo not found" });
 
-    const filePath = findFileRecursive("G:/Photos", row.filename);
-    if (!filePath) return res.sendStatus(404);
+    // CRITICAL: Use full_path, NOT thumbnail_path!
+    let filePath = row.full_path;
 
-    res.sendFile(path.resolve(filePath));
+    // Security: Validate database path is within PHOTO_ROOT
+    if (filePath && !isPathWithinRoot(filePath)) {
+      console.error(`❌ Security: Invalid full_path in database for ID ${id}`);
+      filePath = null;
+    }
+
+    // Verify it's the FULL image, not thumbnail
+    if (!filePath || filePath.includes('.thumb.')) {
+      console.warn(`⚠️  ID ${id}: Database has thumbnail path in full_path! Fixing...`);
+      filePath = null; // Force search
+    }
+
+    if (!filePath || !fs.existsSync(filePath)) {
+      console.log(`⚠️  Path not in DB or doesn't exist for ID ${id}, searching for ORIGINAL file...`);
+      // Search for ORIGINAL file, not thumbnail
+      filePath = findFileRecursive(PHOTO_ROOT, row.filename);
+    }
+    
+    if (!filePath || !fs.existsSync(filePath)) {
+      console.error(`❌ File not found for ID ${id}: ${row.filename}`);
+      return res.status(404).json({ error: "Image not found" });
+    }
+    
+    // Double-check we're NOT serving the thumbnail
+    if (filePath.includes('.thumb.')) {
+      console.error(`❌ ERROR: Almost served thumbnail for ID ${id}! Path: ${filePath}`);
+      return res.status(500).json({ error: "Internal error: thumbnail path detected" });
+    }
+
+    filePath = path.resolve(filePath);
+
+    // Security: Final validation before serving
+    if (!isPathWithinRoot(filePath)) {
+      console.error(`❌ Security: Path traversal blocked for ID ${id}: ${filePath}`);
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    console.log(`✅ Serving FULL image ID ${id}: ${filePath}`);
+    console.log(`   File size: ${(fs.statSync(filePath).size / 1024 / 1024).toFixed(2)} MB`);
+
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate"); // Prevent Cloudflare caching
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    // Resize to a sane max width to avoid massive files.
+    const maxW = Number(req.query.w || 2400);
+    
+    console.log(`   Processing with Sharp (max width: ${maxW}px)...`);
+
+    sharp(filePath)
+      .rotate() // respects EXIF orientation
+      .resize({ width: maxW, withoutEnlargement: true })
+      .jpeg({ quality: 85, progressive: true })
+      .on("error", (e) => {
+        console.error(`❌ Sharp error for ID ${id}:`, e.message);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to process image" });
+        }
+      })
+      .on("info", (info) => {
+        console.log(`   Sharp output: ${info.width}x${info.height}, ${info.format}`);
+      })
+      .pipe(res)
+      .on("error", (e) => {
+        console.error(`❌ Pipe error for ID ${id}:`, e.message);
+      })
+      .on("finish", () => {
+        console.log(`✅ Successfully sent image ID ${id}`);
+      });
+  } catch (err) {
+    console.error("❌ /display error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to load image" });
+    }
+  }
+});
+
+// ---------------- ORIGINAL FILE (OPTIONAL DOWNLOAD, PROTECTED) ----------------
+// Keeps your original behavior available.
+app.get("/photos/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = validatePhotoId(req.params.id);
+    if (id === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+    
+    const row = await dbGet("SELECT filename FROM photos WHERE id = ?", [id]);
+    if (!row) return res.status(404).json({ error: "Photo not found" });
+
+    const filePath = getPhotoPathOr404(res, row.filename);
+    if (!filePath) return;
+
+    res.sendFile(filePath);
   } catch (err) {
     console.error("❌ Photo error:", err);
-    res.sendStatus(500);
+    res.status(500).json({ error: "Failed to load photo" });
+  }
+});
+
+// ---------------- BULK (PROTECTED) ----------------
+app.post("/api/photos/bulk", authenticateToken, async (req, res) => {
+  try {
+    const { action, photoIds, albumName } = req.body;
+
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({ error: "photoIds must be a non-empty array" });
+    }
+
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+
+    switch (action) {
+      case "favorite":
+        for (const photoId of photoIds) {
+          try {
+            const result = await dbRun("UPDATE photos SET is_favorite = 1 WHERE id = ?", [photoId]);
+            result.changes > 0 ? updated++ : skipped++;
+          } catch (e) {
+            errors.push(`Failed to favorite photo ${photoId}: ${e.message}`);
+          }
+        }
+        break;
+
+      case "unfavorite":
+        for (const photoId of photoIds) {
+          try {
+            const result = await dbRun("UPDATE photos SET is_favorite = 0 WHERE id = ?", [photoId]);
+            result.changes > 0 ? updated++ : skipped++;
+          } catch (e) {
+            errors.push(`Failed to unfavorite photo ${photoId}: ${e.message}`);
+          }
+        }
+        break;
+
+      case "add_to_album": {
+        if (!albumName || typeof albumName !== "string") {
+          return res.status(400).json({ error: "albumName is required" });
+        }
+
+        let albumId;
+        const existing = await dbGet("SELECT id FROM albums WHERE name = ?", [albumName.trim()]);
+        if (existing) albumId = existing.id;
+        else {
+          const result = await dbRun("INSERT INTO albums (name) VALUES (?)", [albumName.trim()]);
+          albumId = result.lastID;
+        }
+
+        for (const photoId of photoIds) {
+          try {
+            await dbRun(
+              "INSERT OR IGNORE INTO photo_albums (photo_id, album_id) VALUES (?, ?)",
+              [photoId, albumId]
+            );
+            updated++;
+          } catch (e) {
+            errors.push(`Failed to add ${photoId} to album: ${e.message}`);
+          }
+        }
+        break;
+      }
+
+      case "delete":
+        for (const photoId of photoIds) {
+          try {
+            await dbRun("DELETE FROM photo_albums WHERE photo_id = ?", [photoId]);
+            const result = await dbRun("DELETE FROM photos WHERE id = ?", [photoId]);
+            result.changes > 0 ? updated++ : skipped++;
+          } catch (e) {
+            errors.push(`Failed to delete ${photoId}: ${e.message}`);
+          }
+        }
+        break;
+
+      default:
+        return res.status(400).json({ error: `Unknown action: ${action}` });
+    }
+
+    res.json({ action, updated, skipped, errors, total: photoIds.length });
+  } catch (err) {
+    console.error("❌ Bulk operation error:", err);
+    res.status(500).json({ error: "Bulk operation failed" });
   }
 });
 
 // ---------------- START ----------------
-const server = app.listen(PORT, () => {
-  console.log("=================================");
+app.listen(PORT, () => {
   console.log(`🚀 Backend running on http://127.0.0.1:${PORT}`);
-  console.log(`📂 Photos root: G:/Photos`);
-  console.log("=================================");
-});
-
-server.on("error", (err) => {
-  console.error("❌ Server failed to start:", err.message);
-  process.exit(1);
 });
