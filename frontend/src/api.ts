@@ -67,7 +67,6 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${token}`,
-      "Cache-Control": "no-cache",
     },
   });
 
