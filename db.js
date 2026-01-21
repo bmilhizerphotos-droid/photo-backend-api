@@ -67,11 +67,38 @@ await dbRun(`
   )
 `);
 
+// People table - stores unique people identified in photos
+await dbRun(`
+  CREATE TABLE IF NOT EXISTS people (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    thumbnail_photo_id INTEGER,
+    photo_count INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (thumbnail_photo_id) REFERENCES photos (id) ON DELETE SET NULL
+  )
+`);
+
+// Photo-people relationship table
+await dbRun(`
+  CREATE TABLE IF NOT EXISTS photo_people (
+    photo_id INTEGER,
+    person_id INTEGER,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (photo_id, person_id),
+    FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE,
+    FOREIGN KEY (person_id) REFERENCES people (id) ON DELETE CASCADE
+  )
+`);
+
 // Create indexes for performance
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photos_favorite ON photos(is_favorite)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photos_filename ON photos(filename)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_albums_photo ON photo_albums(photo_id)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_albums_album ON photo_albums(album_id)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_people_name ON people(name)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_people_photo ON photo_people(photo_id)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_people_person ON photo_people(person_id)`);
 
 console.log("✅ SQLite DB opened:", path.join(__dirname, "photo-db.sqlite"));
 

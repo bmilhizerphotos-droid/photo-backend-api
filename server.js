@@ -520,6 +520,135 @@ app.post("/api/photos/bulk", authenticateToken, async (req, res) => {
   }
 });
 
+// ---------------- PEOPLE (PROTECTED) ----------------
+// Get all people with photo counts
+app.get("/api/people", authenticateToken, async (req, res) => {
+  try {
+    const people = await dbAll(`
+      SELECT
+        p.id,
+        p.name,
+        p.photo_count,
+        p.thumbnail_photo_id,
+        ph.filename as thumbnail_filename
+      FROM people p
+      LEFT JOIN photos ph ON p.thumbnail_photo_id = ph.id
+      WHERE p.photo_count > 0
+      ORDER BY p.photo_count DESC
+    `);
+
+    res.json(
+      people.map((person) => ({
+        id: person.id,
+        name: person.name,
+        photoCount: person.photo_count,
+        thumbnailUrl: person.thumbnail_photo_id
+          ? `/thumbnails/${person.thumbnail_photo_id}`
+          : null,
+      }))
+    );
+  } catch (err) {
+    console.error("❌ /api/people error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get a single person with their photos
+app.get("/api/people/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = validatePhotoId(req.params.id);
+    if (id === null) {
+      return res.status(400).json({ error: "Invalid person ID" });
+    }
+
+    const person = await dbGet("SELECT * FROM people WHERE id = ?", [id]);
+    if (!person) {
+      return res.status(404).json({ error: "Person not found" });
+    }
+
+    // Get pagination params
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    // Get photos for this person
+    const photos = await dbAll(
+      `
+      SELECT
+        p.id,
+        p.filename,
+        p.is_favorite,
+        p.created_at
+      FROM photos p
+      JOIN photo_people pp ON p.id = pp.photo_id
+      WHERE pp.person_id = ?
+      ORDER BY p.id
+      LIMIT ? OFFSET ?
+    `,
+      [id, limit, offset]
+    );
+
+    res.json({
+      id: person.id,
+      name: person.name,
+      photoCount: person.photo_count,
+      photos: photos.map((p) => ({
+        id: p.id,
+        filename: p.filename,
+        thumbnailUrl: `/thumbnails/${p.id}`,
+        fullUrl: `/thumbnails/${p.id}?full=true`,
+        isFavorite: Boolean(p.is_favorite),
+        createdAt: p.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error("❌ /api/people/:id error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get photos for a person (paginated)
+app.get("/api/people/:id/photos", authenticateToken, async (req, res) => {
+  try {
+    const id = validatePhotoId(req.params.id);
+    if (id === null) {
+      return res.status(400).json({ error: "Invalid person ID" });
+    }
+
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    const photos = await dbAll(
+      `
+      SELECT
+        p.id,
+        p.filename,
+        p.is_favorite,
+        p.created_at
+      FROM photos p
+      JOIN photo_people pp ON p.id = pp.photo_id
+      WHERE pp.person_id = ?
+      ORDER BY p.id
+      LIMIT ? OFFSET ?
+    `,
+      [id, limit, offset]
+    );
+
+    res.json(
+      photos.map((p) => ({
+        id: p.id,
+        filename: p.filename,
+        thumbnailUrl: `/thumbnails/${p.id}`,
+        fullUrl: `/thumbnails/${p.id}?full=true`,
+        isFavorite: Boolean(p.is_favorite),
+        createdAt: p.created_at,
+      }))
+    );
+  } catch (err) {
+    console.error("❌ /api/people/:id/photos error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
 // ---------------- START ----------------
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on http://127.0.0.1:${PORT}`);

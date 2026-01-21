@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { fetchPhotos, Photo } from './api';
+import { fetchPhotos, fetchPeople, fetchPersonPhotos, Photo, Person } from './api';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
@@ -7,6 +7,7 @@ import { useAuth } from './hooks/useAuth';
 import { usePhotoSelection } from './hooks/usePhotoSelection';
 import { Avatar } from './components/Avatar';
 import { PhotoMasonry } from './components/PhotoMasonry';
+import { PeopleGrid } from './components/PeopleGrid';
 import { BulkActionBar } from './components/BulkActionBar';
 import { ImageModal } from './components/ImageModal';
 import { ToastProvider, useToast } from './components/Toast';
@@ -31,6 +32,14 @@ function AppContent() {
   // When a photo fetch fails, pause infinite auto-loading to avoid hammering auth/token endpoints.
   const [autoLoadPaused, setAutoLoadPaused] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
+
+  // People state
+  const [people, setPeople] = useState<Person[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [peopleError, setPeopleError] = useState<string | null>(null);
+  const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
+  const [personPhotos, setPersonPhotos] = useState<Photo[]>([]);
+  const [personPhotosLoading, setPersonPhotosLoading] = useState(false);
 
   // Use the infinite scroll hook
   const {
@@ -150,6 +159,47 @@ function AppContent() {
     reset();
     void loadMore();
   }, [currentView, user, reset, loadMore]);
+
+  // Load people when entering people view
+  useEffect(() => {
+    if (currentView !== "people") return;
+    if (!user) return;
+
+    const loadPeople = async () => {
+      setPeopleLoading(true);
+      setPeopleError(null);
+      try {
+        const data = await fetchPeople();
+        setPeople(data);
+      } catch (err) {
+        setPeopleError(err instanceof Error ? err.message : "Failed to load people");
+      } finally {
+        setPeopleLoading(false);
+      }
+    };
+
+    loadPeople();
+  }, [currentView, user]);
+
+  // Handle person click - load their photos
+  const handlePersonClick = useCallback(async (person: Person) => {
+    setSelectedPerson(person);
+    setPersonPhotosLoading(true);
+    try {
+      const photos = await fetchPersonPhotos(person.id, 0, 100);
+      setPersonPhotos(photos);
+    } catch (err) {
+      console.error("Failed to load person photos:", err);
+    } finally {
+      setPersonPhotosLoading(false);
+    }
+  }, []);
+
+  // Go back to people list
+  const handleBackToPeople = useCallback(() => {
+    setSelectedPerson(null);
+    setPersonPhotos([]);
+  }, []);
 
   // Load more only when sentinel hits viewport.
   // IMPORTANT: disable when there's an error or when we've paused auto loading.
@@ -323,7 +373,61 @@ function AppContent() {
         );
 
       case 'people':
-        return renderPlaceholderView('People', '👥');
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            {selectedPerson ? (
+              // Show photos for selected person
+              <>
+                <div className="mb-6 flex items-center space-x-4">
+                  <button
+                    onClick={handleBackToPeople}
+                    className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    <span>Back to People</span>
+                  </button>
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                  {selectedPerson.name}
+                  <span className="text-gray-500 font-normal text-lg ml-2">
+                    ({selectedPerson.photoCount} photos)
+                  </span>
+                </h2>
+                {personPhotosLoading ? (
+                  <div className="flex justify-center items-center py-12">
+                    <div className="flex items-center space-x-2 text-gray-500">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                      <span>Loading photos...</span>
+                    </div>
+                  </div>
+                ) : (
+                  <PhotoMasonry
+                    photos={personPhotos}
+                    onPhotoClick={handlePhotoClick}
+                    selectedIds={selectedIds}
+                    selectMode={selectMode}
+                  />
+                )}
+              </>
+            ) : (
+              // Show people grid
+              <>
+                {peopleError && (
+                  <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-red-600">{peopleError}</p>
+                  </div>
+                )}
+                <PeopleGrid
+                  people={people}
+                  onPersonClick={handlePersonClick}
+                  loading={peopleLoading}
+                />
+              </>
+            )}
+          </div>
+        );
 
       case 'memories':
         return renderPlaceholderView('Memories', '📅');

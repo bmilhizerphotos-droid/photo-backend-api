@@ -148,3 +148,104 @@ export const preloadImage = (src: string): Promise<void> =>
     img.onerror = reject;
     img.src = src;
   });
+
+// ============== PEOPLE API ==============
+
+export interface Person {
+  id: number;
+  name: string;
+  photoCount: number;
+  thumbnailUrl: string | null;
+}
+
+export interface PersonWithPhotos extends Person {
+  photos: Photo[];
+}
+
+/**
+ * Fetch all people with photo counts
+ */
+export async function fetchPeople(): Promise<Person[]> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/people"), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch people: ${res.status} ${res.statusText}`);
+  }
+
+  const people: Person[] = await res.json();
+
+  // Authenticate thumbnail URLs
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+  const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+  return people.map(person => {
+    let thumbnailUrl = person.thumbnailUrl;
+    if (thumbnailUrl) {
+      if (isDev) {
+        thumbnailUrl = `${thumbnailUrl}?${authParams}`;
+      } else if (baseFromEnv) {
+        thumbnailUrl = `${baseFromEnv}${thumbnailUrl}?${authParams}`;
+      }
+    }
+    return { ...person, thumbnailUrl };
+  });
+}
+
+/**
+ * Fetch photos for a specific person
+ */
+export async function fetchPersonPhotos(personId: number, offset = 0, limit = 50): Promise<Photo[]> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl(`/api/people/${personId}/photos?offset=${offset}&limit=${limit}`), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch person photos: ${res.status} ${res.statusText}`);
+  }
+
+  const photos: Photo[] = await res.json();
+
+  // Authenticate thumbnail and full URLs
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+  const cacheBuster = String(Date.now());
+
+  return photos.map(photo => {
+    const authParams = `token=${encodeURIComponent(token)}&v=${cacheBuster}`;
+
+    let thumbnailUrl = photo.thumbnailUrl;
+    if (thumbnailUrl) {
+      if (isDev) {
+        thumbnailUrl = `${thumbnailUrl}${thumbnailUrl.includes('?') ? '&' : '?'}${authParams}`;
+      } else if (baseFromEnv) {
+        thumbnailUrl = `${baseFromEnv}${thumbnailUrl.startsWith('/') ? '' : '/'}${thumbnailUrl}${thumbnailUrl.includes('?') ? '&' : '?'}${authParams}`;
+      }
+    }
+
+    let fullUrl = photo.fullUrl;
+    if (fullUrl) {
+      if (isDev) {
+        fullUrl = `${fullUrl}${fullUrl.includes('?') ? '&' : '?'}${authParams}`;
+      } else if (baseFromEnv) {
+        fullUrl = `${baseFromEnv}${fullUrl.startsWith('/') ? '' : '/'}${fullUrl}${fullUrl.includes('?') ? '&' : '?'}${authParams}`;
+      }
+    }
+
+    return { ...photo, thumbnailUrl, fullUrl };
+  });
+}
