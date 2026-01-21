@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { fetchPhotos, getAuthenticatedImageUrl, Photo } from './api';
+import { fetchPhotos, Photo } from './api';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
@@ -64,7 +64,7 @@ function AppContent() {
   }, [reset, loadMore]);
 
   // Handle photo click with multi-select logic
-  const handlePhotoClick = useCallback(async (photo: Photo, event?: React.MouseEvent) => {
+  const handlePhotoClick = useCallback((photo: Photo, event?: React.MouseEvent) => {
     // If any modifier keys are pressed, handle as selection
     if (event?.shiftKey || event?.ctrlKey || event?.metaKey) {
       toggleSelection(photo.id, event);
@@ -72,25 +72,10 @@ function AppContent() {
     }
 
     // Normal click - open modal
+    // URLs are already authenticated from fetchPhotos, so use them directly
     setSelectedPhoto(photo);
-    setModalLoading(true);
-    setSelectedPhotoUrl('');
-
-    try {
-      const authenticatedUrl = await getAuthenticatedImageUrl(photo.fullUrl);
-      setSelectedPhotoUrl(authenticatedUrl);
-    } catch (err) {
-      console.error("Error loading full-size image:", err);
-      // Try to authenticate the thumbnail URL as fallback
-      try {
-        const fallbackUrl = await getAuthenticatedImageUrl(photo.thumbnailUrl);
-        setSelectedPhotoUrl(fallbackUrl);
-      } catch {
-        setSelectedPhotoUrl(photo.fullUrl);
-      }
-    } finally {
-      setModalLoading(false);
-    }
+    setSelectedPhotoUrl(photo.fullUrl);
+    setModalLoading(false);
   }, [toggleSelection]);
 
   // Bulk action handler

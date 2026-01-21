@@ -75,7 +75,43 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
   }
 
   const data = await res.json();
-  return Array.isArray(data) ? data : data.photos ?? [];
+  const photos: Photo[] = Array.isArray(data) ? data : data.photos ?? [];
+
+  // Authenticate thumbnail and full URLs so <img> tags can load them
+  // (browser img tags can't send Authorization headers, so we use query param tokens)
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+  const cacheBuster = String(Date.now());
+
+  return photos.map(photo => {
+    const authParams = `token=${encodeURIComponent(token)}&v=${cacheBuster}`;
+
+    // Build authenticated thumbnail URL
+    let thumbnailUrl = photo.thumbnailUrl;
+    if (thumbnailUrl) {
+      if (isDev) {
+        thumbnailUrl = `${thumbnailUrl}${thumbnailUrl.includes('?') ? '&' : '?'}${authParams}`;
+      } else if (baseFromEnv) {
+        thumbnailUrl = `${baseFromEnv}${thumbnailUrl.startsWith('/') ? '' : '/'}${thumbnailUrl}${thumbnailUrl.includes('?') ? '&' : '?'}${authParams}`;
+      }
+    }
+
+    // Build authenticated full URL
+    let fullUrl = photo.fullUrl;
+    if (fullUrl) {
+      if (isDev) {
+        fullUrl = `${fullUrl}${fullUrl.includes('?') ? '&' : '?'}${authParams}`;
+      } else if (baseFromEnv) {
+        fullUrl = `${baseFromEnv}${fullUrl.startsWith('/') ? '' : '/'}${fullUrl}${fullUrl.includes('?') ? '&' : '?'}${authParams}`;
+      }
+    }
+
+    return {
+      ...photo,
+      thumbnailUrl,
+      fullUrl,
+    };
+  });
 }
 
 /**
