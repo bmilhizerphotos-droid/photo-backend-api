@@ -38,14 +38,24 @@ A modern photo gallery backend API built with Node.js, Express, and SQLite. Feat
    cd frontend && npm install && cd ..
    ```
 
-3. **Set up the database**
+3. **Configure environment variables (optional)**
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+   
+   # Edit .env to customize:
+   # - PORT: Backend server port (default: 3001)
+   # - PHOTO_ROOT: Path to photo directory (default: G:/Photos)
+   ```
+
+4. **Set up the database**
    ```bash
    # The database will be created automatically when you run the server
    # If you have photos to index, run the photo scanning script
    node scan-and-fill-paths.js
    ```
 
-4. **Start the development servers**
+5. **Start the development servers**
    ```bash
    # Terminal 1: Backend API
    npm run server
@@ -54,9 +64,9 @@ A modern photo gallery backend API built with Node.js, Express, and SQLite. Feat
    cd frontend && npm run dev
    ```
 
-5. **Open your browser**
+6. **Open your browser**
    - Frontend: http://localhost:5173
-   - Backend API: http://localhost:3000
+   - Backend API: http://localhost:3001
 
 ## API Endpoints
 
@@ -97,8 +107,19 @@ photo-backend-api/
 
 ## Configuration
 
-### Photo Directory
-Update the photo directory path in `server.js`:
+### Environment Variables
+The backend supports the following environment variables (create a `.env` file):
+
+```bash
+# Backend server port (default: 3001)
+PORT=3001
+
+# Root directory for photos (default: G:/Photos)
+PHOTO_ROOT=G:/Photos
+```
+
+### Photo Directory (Alternative Method)
+If not using environment variables, update the hardcoded path in `server.js`:
 ```javascript
 const BASE_PHOTO_DIR = "G:/Photos"; // Change this to your photo folder
 ```

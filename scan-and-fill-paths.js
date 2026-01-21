@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import db from "./db.js";
 
-const PHOTO_ROOT = "G:/Photos";
+const PHOTO_ROOT = process.env.PHOTO_ROOT || "G:/Photos";
 
 function findFile(root, targetName) {
   const stack = [root];

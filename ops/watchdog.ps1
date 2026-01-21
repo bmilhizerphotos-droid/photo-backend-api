@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $BackendServiceName = "MilhizerPhotoBackend"
 $TunnelServiceName  = "cloudflared"
 
-$LocalHealthUrl  = "http://127.0.0.1:3000/health"
+$LocalHealthUrl  = "http://127.0.0.1:3001/health"
 $PublicHealthUrl = "https://api.milhizerfamilyphotos.org/health"
 
 $LogPath = "C:\Users\bmilh\photo-backend\logs\watchdog.log"

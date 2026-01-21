@@ -10,6 +10,13 @@ pnpm-debug.log*
 .pnpm-store/
 
 # =========================
+# Environment variables
+# =========================
+.env
+.env.local
+.env.*.local
+
+# =========================
 # Databases / local data
 # =========================
 *.db
