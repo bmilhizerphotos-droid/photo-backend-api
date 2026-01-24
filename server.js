@@ -7,6 +7,7 @@ import cors from "cors";
 import sharp from "sharp";
 import { dbGet, dbAll, dbRun } from "./db.js";
 import admin from "firebase-admin";
+import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -148,6 +149,8 @@ async function findFileAsync(root, targetName) {
     return null;
   }
 
+  // Folders to exclude from search
+  const excludedFolders = ['_duplicates', '.thumb', '@eaDir'];
   const stack = [resolvedRoot];
 
   while (stack.length > 0) {
@@ -155,6 +158,9 @@ async function findFileAsync(root, targetName) {
     try {
       const entries = await fsPromises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
+        // Skip excluded folders
+        if (excludedFolders.includes(entry.name)) continue;
+
         const fullPath = path.join(dir, entry.name);
         // Security: Double-check each path stays within bounds
         if (!isPathWithinRoot(fullPath)) continue;
@@ -646,6 +652,1241 @@ app.get("/api/people/:id/photos", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("❌ /api/people/:id/photos error:", err);
     res.status(500).json({ error: "Database error" });
+  }
+});
+
+// ---------------- FACE DETECTION & TAGGING API ----------------
+
+// Get photos with unidentified faces
+app.get("/api/faces/unidentified", authenticateToken, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    // Get photos that have faces where person_id IS NULL (unidentified)
+    const photos = await dbAll(`
+      SELECT DISTINCT
+        p.id,
+        p.filename,
+        p.is_favorite,
+        p.created_at,
+        (SELECT COUNT(*) FROM face_embeddings fe WHERE fe.photo_id = p.id AND fe.person_id IS NULL) as unidentified_count,
+        (SELECT COUNT(*) FROM face_embeddings fe WHERE fe.photo_id = p.id) as total_faces
+      FROM photos p
+      INNER JOIN face_embeddings fe ON p.id = fe.photo_id
+      WHERE fe.person_id IS NULL
+      GROUP BY p.id
+      ORDER BY unidentified_count DESC, p.id
+      LIMIT ? OFFSET ?
+    `, [limit, offset]);
+
+    // Get total count for pagination
+    const countResult = await dbGet(`
+      SELECT COUNT(DISTINCT p.id) as count
+      FROM photos p
+      INNER JOIN face_embeddings fe ON p.id = fe.photo_id
+      WHERE fe.person_id IS NULL
+    `);
+
+    res.json({
+      photos: photos.map((p) => ({
+        id: p.id,
+        filename: p.filename,
+        thumbnailUrl: `/thumbnails/${p.id}`,
+        fullUrl: `/thumbnails/${p.id}?full=true`,
+        isFavorite: Boolean(p.is_favorite),
+        createdAt: p.created_at,
+        unidentifiedCount: p.unidentified_count,
+        totalFaces: p.total_faces,
+      })),
+      total: countResult?.count || 0,
+    });
+  } catch (err) {
+    console.error("❌ /api/faces/unidentified error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get detected faces for a specific photo
+app.get("/api/photos/:id/faces", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    const faces = await dbAll(`
+      SELECT
+        fe.id,
+        fe.person_id,
+        fe.bbox_x,
+        fe.bbox_y,
+        fe.bbox_width,
+        fe.bbox_height,
+        fe.confidence,
+        p.name as person_name
+      FROM face_embeddings fe
+      LEFT JOIN people p ON fe.person_id = p.id
+      WHERE fe.photo_id = ?
+      ORDER BY fe.id
+    `, [photoId]);
+
+    res.json(faces.map(f => ({
+      id: f.id,
+      personId: f.person_id,
+      personName: f.person_name,
+      bbox: {
+        x: f.bbox_x,
+        y: f.bbox_y,
+        width: f.bbox_width,
+        height: f.bbox_height,
+      },
+      confidence: f.confidence,
+    })));
+  } catch (err) {
+    console.error("❌ /api/photos/:id/faces error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Assign a face to a person
+app.post("/api/faces/:faceId/identify", authenticateToken, async (req, res) => {
+  try {
+    const faceId = validatePhotoId(req.params.faceId);
+    if (faceId === null) {
+      return res.status(400).json({ error: "Invalid face ID" });
+    }
+
+    const { personId } = req.body;
+    if (!personId || !Number.isInteger(Number(personId))) {
+      return res.status(400).json({ error: "Valid personId is required" });
+    }
+
+    // Verify the face exists
+    const face = await dbGet("SELECT * FROM face_embeddings WHERE id = ?", [faceId]);
+    if (!face) {
+      return res.status(404).json({ error: "Face not found" });
+    }
+
+    // Verify the person exists
+    const person = await dbGet("SELECT * FROM people WHERE id = ?", [personId]);
+    if (!person) {
+      return res.status(404).json({ error: "Person not found" });
+    }
+
+    // Update the face with the person ID
+    await dbRun(
+      "UPDATE face_embeddings SET person_id = ? WHERE id = ?",
+      [personId, faceId]
+    );
+
+    // Add to photo_people junction table if not already there
+    await dbRun(
+      "INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)",
+      [face.photo_id, personId]
+    );
+
+    // Update person's photo count
+    const photoCount = await dbGet(
+      "SELECT COUNT(DISTINCT photo_id) as count FROM photo_people WHERE person_id = ?",
+      [personId]
+    );
+    await dbRun(
+      "UPDATE people SET photo_count = ? WHERE id = ?",
+      [photoCount.count, personId]
+    );
+
+    // Update person's face count
+    const faceCount = await dbGet(
+      "SELECT COUNT(*) as count FROM face_embeddings WHERE person_id = ?",
+      [personId]
+    );
+    await dbRun(
+      "UPDATE people SET face_count = ? WHERE id = ?",
+      [faceCount.count, personId]
+    );
+
+    // Add this face as a reference embedding for future matching
+    await dbRun(
+      `INSERT INTO person_reference_embeddings (person_id, embedding, source_face_id)
+       VALUES (?, ?, ?)`,
+      [personId, face.embedding, faceId]
+    );
+
+    res.json({ success: true, faceId, personId });
+  } catch (err) {
+    console.error("❌ /api/faces/:faceId/identify error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Create a new person from a face
+app.post("/api/faces/:faceId/create-person", authenticateToken, async (req, res) => {
+  try {
+    const faceId = validatePhotoId(req.params.faceId);
+    if (faceId === null) {
+      return res.status(400).json({ error: "Invalid face ID" });
+    }
+
+    const { name } = req.body;
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "Name is required" });
+    }
+
+    // Verify the face exists
+    const face = await dbGet("SELECT * FROM face_embeddings WHERE id = ?", [faceId]);
+    if (!face) {
+      return res.status(404).json({ error: "Face not found" });
+    }
+
+    // Create the person
+    const result = await dbRun(
+      "INSERT INTO people (name, thumbnail_photo_id, photo_count, face_count) VALUES (?, ?, 1, 1)",
+      [name.trim(), face.photo_id]
+    );
+    const personId = result.lastID;
+
+    // Update the face with the person ID
+    await dbRun(
+      "UPDATE face_embeddings SET person_id = ? WHERE id = ?",
+      [personId, faceId]
+    );
+
+    // Add to photo_people junction table
+    await dbRun(
+      "INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)",
+      [face.photo_id, personId]
+    );
+
+    // Add this face as a reference embedding for future matching
+    await dbRun(
+      `INSERT INTO person_reference_embeddings (person_id, embedding, source_face_id)
+       VALUES (?, ?, ?)`,
+      [personId, face.embedding, faceId]
+    );
+
+    res.json({
+      success: true,
+      person: {
+        id: personId,
+        name: name.trim(),
+        photoCount: 1,
+        thumbnailUrl: `/thumbnails/${face.photo_id}`,
+      },
+    });
+  } catch (err) {
+    if (err.message?.includes("UNIQUE constraint failed")) {
+      return res.status(409).json({ error: "A person with this name already exists" });
+    }
+    console.error("❌ /api/faces/:faceId/create-person error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Manual tag - add a person to a photo without face detection
+app.post("/api/photos/:id/tag", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    const { personId } = req.body;
+    if (!personId || !Number.isInteger(Number(personId))) {
+      return res.status(400).json({ error: "Valid personId is required" });
+    }
+
+    // Verify the photo exists
+    const photo = await dbGet("SELECT id FROM photos WHERE id = ?", [photoId]);
+    if (!photo) {
+      return res.status(404).json({ error: "Photo not found" });
+    }
+
+    // Verify the person exists
+    const person = await dbGet("SELECT * FROM people WHERE id = ?", [personId]);
+    if (!person) {
+      return res.status(404).json({ error: "Person not found" });
+    }
+
+    // Add to photo_people junction table
+    const result = await dbRun(
+      "INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)",
+      [photoId, personId]
+    );
+
+    if (result.changes > 0) {
+      // Update person's photo count
+      const photoCount = await dbGet(
+        "SELECT COUNT(*) as count FROM photo_people WHERE person_id = ?",
+        [personId]
+      );
+      await dbRun(
+        "UPDATE people SET photo_count = ? WHERE id = ?",
+        [photoCount.count, personId]
+      );
+    }
+
+    res.json({ success: true, photoId, personId, added: result.changes > 0 });
+  } catch (err) {
+    console.error("❌ /api/photos/:id/tag error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Remove a tag from a photo
+app.delete("/api/photos/:id/tag/:personId", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    const personId = validatePhotoId(req.params.personId);
+
+    if (photoId === null || personId === null) {
+      return res.status(400).json({ error: "Invalid photo or person ID" });
+    }
+
+    // Remove from photo_people junction table
+    const result = await dbRun(
+      "DELETE FROM photo_people WHERE photo_id = ? AND person_id = ?",
+      [photoId, personId]
+    );
+
+    // Also unset person_id on any face embeddings for this photo/person combo
+    await dbRun(
+      "UPDATE face_embeddings SET person_id = NULL WHERE photo_id = ? AND person_id = ?",
+      [photoId, personId]
+    );
+
+    if (result.changes > 0) {
+      // Update person's photo count
+      const photoCount = await dbGet(
+        "SELECT COUNT(*) as count FROM photo_people WHERE person_id = ?",
+        [personId]
+      );
+      await dbRun(
+        "UPDATE people SET photo_count = ? WHERE id = ?",
+        [photoCount.count, personId]
+      );
+
+      // Update face count
+      const faceCount = await dbGet(
+        "SELECT COUNT(*) as count FROM face_embeddings WHERE person_id = ?",
+        [personId]
+      );
+      await dbRun(
+        "UPDATE people SET face_count = ? WHERE id = ?",
+        [faceCount.count, personId]
+      );
+    }
+
+    res.json({ success: true, photoId, personId, removed: result.changes > 0 });
+  } catch (err) {
+    console.error("❌ /api/photos/:id/tag/:personId error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Bulk tag photos with a person
+app.post("/api/photos/bulk/tag", authenticateToken, async (req, res) => {
+  try {
+    const { photoIds, personId } = req.body;
+
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({ error: "photoIds must be a non-empty array" });
+    }
+
+    if (!personId || !Number.isInteger(Number(personId))) {
+      return res.status(400).json({ error: "Valid personId is required" });
+    }
+
+    // Verify the person exists
+    const person = await dbGet("SELECT * FROM people WHERE id = ?", [personId]);
+    if (!person) {
+      return res.status(404).json({ error: "Person not found" });
+    }
+
+    let added = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (const photoId of photoIds) {
+      try {
+        const result = await dbRun(
+          "INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)",
+          [photoId, personId]
+        );
+        result.changes > 0 ? added++ : skipped++;
+      } catch (e) {
+        errors.push(`Failed to tag photo ${photoId}: ${e.message}`);
+      }
+    }
+
+    // Update person's photo count
+    const photoCount = await dbGet(
+      "SELECT COUNT(*) as count FROM photo_people WHERE person_id = ?",
+      [personId]
+    );
+    await dbRun(
+      "UPDATE people SET photo_count = ? WHERE id = ?",
+      [photoCount.count, personId]
+    );
+
+    res.json({ success: true, added, skipped, errors, total: photoIds.length });
+  } catch (err) {
+    console.error("❌ /api/photos/bulk/tag error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Search people by name
+app.get("/api/people/search", authenticateToken, async (req, res) => {
+  try {
+    const query = req.query.q;
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ error: "Query parameter 'q' is required" });
+    }
+
+    const people = await dbAll(`
+      SELECT
+        p.id,
+        p.name,
+        p.photo_count,
+        p.face_count,
+        p.thumbnail_photo_id
+      FROM people p
+      WHERE p.name LIKE ?
+      ORDER BY p.photo_count DESC
+      LIMIT 20
+    `, [`%${query}%`]);
+
+    res.json(people.map(person => ({
+      id: person.id,
+      name: person.name,
+      photoCount: person.photo_count || 0,
+      faceCount: person.face_count || 0,
+      thumbnailUrl: person.thumbnail_photo_id
+        ? `/thumbnails/${person.thumbnail_photo_id}`
+        : null,
+    })));
+  } catch (err) {
+    console.error("❌ /api/people/search error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get count of unidentified faces
+app.get("/api/faces/unidentified/count", authenticateToken, async (req, res) => {
+  try {
+    const result = await dbGet(`
+      SELECT COUNT(DISTINCT photo_id) as photoCount, COUNT(*) as faceCount
+      FROM face_embeddings
+      WHERE person_id IS NULL
+    `);
+
+    res.json({
+      photoCount: result?.photoCount || 0,
+      faceCount: result?.faceCount || 0,
+    });
+  } catch (err) {
+    console.error("❌ /api/faces/unidentified/count error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get people tagged in a specific photo
+app.get("/api/photos/:id/people", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    const people = await dbAll(`
+      SELECT
+        p.id,
+        p.name,
+        p.photo_count,
+        p.thumbnail_photo_id
+      FROM people p
+      INNER JOIN photo_people pp ON p.id = pp.person_id
+      WHERE pp.photo_id = ?
+      ORDER BY p.name
+    `, [photoId]);
+
+    res.json(people.map(person => ({
+      id: person.id,
+      name: person.name,
+      photoCount: person.photo_count || 0,
+      thumbnailUrl: person.thumbnail_photo_id
+        ? `/thumbnails/${person.thumbnail_photo_id}`
+        : null,
+    })));
+  } catch (err) {
+    console.error("❌ /api/photos/:id/people error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// ========== ALBUM ENDPOINTS ==========
+
+// Get all albums for the current user
+app.get("/api/albums", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const albums = await dbAll(`
+      SELECT
+        a.id,
+        a.name,
+        a.description,
+        a.cover_photo_id,
+        a.created_at,
+        a.updated_at,
+        COUNT(pa.photo_id) as photo_count
+      FROM albums a
+      LEFT JOIN photo_albums pa ON a.id = pa.album_id
+      WHERE a.user_id = ?
+      GROUP BY a.id
+      ORDER BY a.updated_at DESC
+    `, [userId]);
+
+    res.json(albums.map(album => ({
+      id: album.id,
+      name: album.name,
+      description: album.description,
+      coverPhotoId: album.cover_photo_id,
+      photoCount: album.photo_count || 0,
+      createdAt: album.created_at,
+      updatedAt: album.updated_at,
+    })));
+  } catch (err) {
+    console.error("❌ /api/albums error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get a specific album with its photos
+app.get("/api/albums/:id", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const albumId = parseInt(req.params.id, 10);
+
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    if (isNaN(albumId)) {
+      return res.status(400).json({ error: "Invalid album ID" });
+    }
+
+    // Get album details (only if it belongs to the user)
+    const album = await dbGet(`
+      SELECT id, name, description, cover_photo_id, created_at, updated_at
+      FROM albums
+      WHERE id = ? AND user_id = ?
+    `, [albumId, userId]);
+
+    if (!album) {
+      return res.status(404).json({ error: "Album not found" });
+    }
+
+    // Get photos in the album
+    const photos = await dbAll(`
+      SELECT p.id, p.filename, p.full_path, p.is_favorite, pa.added_at
+      FROM photos p
+      INNER JOIN photo_albums pa ON p.id = pa.photo_id
+      WHERE pa.album_id = ?
+      ORDER BY pa.added_at DESC
+    `, [albumId]);
+
+    res.json({
+      id: album.id,
+      name: album.name,
+      description: album.description,
+      coverPhotoId: album.cover_photo_id,
+      createdAt: album.created_at,
+      updatedAt: album.updated_at,
+      photos: photos.map(p => ({
+        id: p.id,
+        filename: p.filename,
+        isFavorite: !!p.is_favorite,
+        addedAt: p.added_at,
+      })),
+    });
+  } catch (err) {
+    console.error("❌ /api/albums/:id error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Create a new album
+app.post("/api/albums", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { name, description } = req.body;
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json({ error: "Album name is required" });
+    }
+
+    const result = await dbRun(`
+      INSERT INTO albums (user_id, name, description, created_at, updated_at)
+      VALUES (?, ?, ?, datetime('now'), datetime('now'))
+    `, [userId, name.trim(), description?.trim() || null]);
+
+    res.status(201).json({
+      id: result.lastID,
+      name: name.trim(),
+      description: description?.trim() || null,
+      photoCount: 0,
+    });
+  } catch (err) {
+    console.error("❌ POST /api/albums error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Update an album (rename/description)
+app.put("/api/albums/:id", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const albumId = parseInt(req.params.id, 10);
+
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    if (isNaN(albumId)) {
+      return res.status(400).json({ error: "Invalid album ID" });
+    }
+
+    const { name, description, coverPhotoId } = req.body;
+
+    // Verify ownership
+    const album = await dbGet(`SELECT id FROM albums WHERE id = ? AND user_id = ?`, [albumId, userId]);
+    if (!album) {
+      return res.status(404).json({ error: "Album not found" });
+    }
+
+    // Build update query dynamically
+    const updates = [];
+    const params = [];
+
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return res.status(400).json({ error: "Album name cannot be empty" });
+      }
+      updates.push('name = ?');
+      params.push(name.trim());
+    }
+
+    if (description !== undefined) {
+      updates.push('description = ?');
+      params.push(description?.trim() || null);
+    }
+
+    if (coverPhotoId !== undefined) {
+      updates.push('cover_photo_id = ?');
+      params.push(coverPhotoId);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: "No updates provided" });
+    }
+
+    updates.push("updated_at = datetime('now')");
+    params.push(albumId, userId);
+
+    await dbRun(`
+      UPDATE albums SET ${updates.join(', ')}
+      WHERE id = ? AND user_id = ?
+    `, params);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ PUT /api/albums/:id error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Delete an album
+app.delete("/api/albums/:id", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const albumId = parseInt(req.params.id, 10);
+
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    if (isNaN(albumId)) {
+      return res.status(400).json({ error: "Invalid album ID" });
+    }
+
+    // Verify ownership and delete
+    const result = await dbRun(`DELETE FROM albums WHERE id = ? AND user_id = ?`, [albumId, userId]);
+
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Album not found" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ DELETE /api/albums/:id error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Add a single photo to an album
+app.post("/api/albums/:id/photos", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const albumId = parseInt(req.params.id, 10);
+    const { photoId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    if (isNaN(albumId)) {
+      return res.status(400).json({ error: "Invalid album ID" });
+    }
+
+    const validPhotoId = validatePhotoId(photoId);
+    if (validPhotoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    // Verify album ownership
+    const album = await dbGet(`SELECT id FROM albums WHERE id = ? AND user_id = ?`, [albumId, userId]);
+    if (!album) {
+      return res.status(404).json({ error: "Album not found" });
+    }
+
+    // Add photo to album (ignore if already exists)
+    await dbRun(`
+      INSERT OR IGNORE INTO photo_albums (photo_id, album_id, added_at)
+      VALUES (?, ?, datetime('now'))
+    `, [validPhotoId, albumId]);
+
+    // Update album's updated_at
+    await dbRun(`UPDATE albums SET updated_at = datetime('now') WHERE id = ?`, [albumId]);
+
+    // Set cover photo if this is the first photo
+    const coverCheck = await dbGet(`SELECT cover_photo_id FROM albums WHERE id = ?`, [albumId]);
+    if (!coverCheck.cover_photo_id) {
+      await dbRun(`UPDATE albums SET cover_photo_id = ? WHERE id = ?`, [validPhotoId, albumId]);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ POST /api/albums/:id/photos error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Bulk add photos to an album
+app.post("/api/albums/:id/photos/bulk", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const albumId = parseInt(req.params.id, 10);
+    const { photoIds } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    if (isNaN(albumId)) {
+      return res.status(400).json({ error: "Invalid album ID" });
+    }
+
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({ error: "photoIds array is required" });
+    }
+
+    // Verify album ownership
+    const album = await dbGet(`SELECT id, cover_photo_id FROM albums WHERE id = ? AND user_id = ?`, [albumId, userId]);
+    if (!album) {
+      return res.status(404).json({ error: "Album not found" });
+    }
+
+    // Add each photo
+    let added = 0;
+    for (const photoId of photoIds) {
+      const validId = validatePhotoId(photoId);
+      if (validId !== null) {
+        try {
+          await dbRun(`
+            INSERT OR IGNORE INTO photo_albums (photo_id, album_id, added_at)
+            VALUES (?, ?, datetime('now'))
+          `, [validId, albumId]);
+          added++;
+        } catch {
+          // Ignore individual insert errors
+        }
+      }
+    }
+
+    // Update album's updated_at
+    await dbRun(`UPDATE albums SET updated_at = datetime('now') WHERE id = ?`, [albumId]);
+
+    // Set cover photo if not set
+    if (!album.cover_photo_id && photoIds.length > 0) {
+      const firstValidId = validatePhotoId(photoIds[0]);
+      if (firstValidId !== null) {
+        await dbRun(`UPDATE albums SET cover_photo_id = ? WHERE id = ?`, [firstValidId, albumId]);
+      }
+    }
+
+    res.json({ success: true, added });
+  } catch (err) {
+    console.error("❌ POST /api/albums/:id/photos/bulk error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Remove a photo from an album
+app.delete("/api/albums/:id/photos/:photoId", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const albumId = parseInt(req.params.id, 10);
+    const photoId = validatePhotoId(req.params.photoId);
+
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    if (isNaN(albumId)) {
+      return res.status(400).json({ error: "Invalid album ID" });
+    }
+
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    // Verify album ownership
+    const album = await dbGet(`SELECT id, cover_photo_id FROM albums WHERE id = ? AND user_id = ?`, [albumId, userId]);
+    if (!album) {
+      return res.status(404).json({ error: "Album not found" });
+    }
+
+    // Remove photo from album
+    await dbRun(`DELETE FROM photo_albums WHERE album_id = ? AND photo_id = ?`, [albumId, photoId]);
+
+    // Update album's updated_at
+    await dbRun(`UPDATE albums SET updated_at = datetime('now') WHERE id = ?`, [albumId]);
+
+    // If removed photo was the cover, update cover to another photo or null
+    if (album.cover_photo_id === photoId) {
+      const newCover = await dbGet(`
+        SELECT photo_id FROM photo_albums WHERE album_id = ? LIMIT 1
+      `, [albumId]);
+      await dbRun(`UPDATE albums SET cover_photo_id = ? WHERE id = ?`, [newCover?.photo_id || null, albumId]);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ DELETE /api/albums/:id/photos/:photoId error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// ========== TAGS ENDPOINTS ==========
+
+// Get all tags (for autocomplete/search)
+app.get("/api/tags", authenticateToken, async (req, res) => {
+  try {
+    const { type, q } = req.query;
+
+    let query = `SELECT id, name, type, color FROM tags`;
+    const params = [];
+    const conditions = [];
+
+    if (type) {
+      conditions.push(`type = ?`);
+      params.push(type);
+    }
+
+    if (q) {
+      conditions.push(`name LIKE ?`);
+      params.push(`%${q}%`);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    query += ` ORDER BY name ASC LIMIT 100`;
+
+    const tags = await dbAll(query, params);
+    res.json(tags);
+  } catch (err) {
+    console.error("❌ /api/tags error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Create a new tag
+app.post("/api/tags", authenticateToken, async (req, res) => {
+  try {
+    const { name, type = 'user', color } = req.body;
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json({ error: "Tag name is required" });
+    }
+
+    const validTypes = ['user', 'ai', 'person'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: "Invalid tag type" });
+    }
+
+    // Check if tag already exists
+    const existing = await dbGet(
+      `SELECT id, name, type, color FROM tags WHERE name = ? AND type = ?`,
+      [name.trim().toLowerCase(), type]
+    );
+
+    if (existing) {
+      return res.json(existing); // Return existing tag instead of error
+    }
+
+    const result = await dbRun(
+      `INSERT INTO tags (name, type, color) VALUES (?, ?, ?)`,
+      [name.trim().toLowerCase(), type, color || null]
+    );
+
+    res.status(201).json({
+      id: result.lastID,
+      name: name.trim().toLowerCase(),
+      type,
+      color: color || null,
+    });
+  } catch (err) {
+    console.error("❌ POST /api/tags error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get tags for a specific photo
+app.get("/api/photos/:id/tags", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    const tags = await dbAll(`
+      SELECT t.id, t.name, t.type, t.color, pt.added_by, pt.added_at
+      FROM tags t
+      INNER JOIN photo_tags pt ON t.id = pt.tag_id
+      WHERE pt.photo_id = ?
+      ORDER BY t.type, t.name
+    `, [photoId]);
+
+    res.json(tags);
+  } catch (err) {
+    console.error("❌ /api/photos/:id/tags error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Add a tag to a photo
+app.post("/api/photos/:id/tags", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    const { tagId, tagName, tagType = 'user' } = req.body;
+    const userId = req.user?.uid;
+
+    let finalTagId = tagId;
+
+    // If tagName is provided instead of tagId, find or create the tag
+    if (!finalTagId && tagName) {
+      const existingTag = await dbGet(
+        `SELECT id FROM tags WHERE name = ? AND type = ?`,
+        [tagName.trim().toLowerCase(), tagType]
+      );
+
+      if (existingTag) {
+        finalTagId = existingTag.id;
+      } else {
+        const result = await dbRun(
+          `INSERT INTO tags (name, type) VALUES (?, ?)`,
+          [tagName.trim().toLowerCase(), tagType]
+        );
+        finalTagId = result.lastID;
+      }
+    }
+
+    if (!finalTagId) {
+      return res.status(400).json({ error: "Either tagId or tagName is required" });
+    }
+
+    // Add the tag to the photo
+    await dbRun(
+      `INSERT OR IGNORE INTO photo_tags (photo_id, tag_id, added_by, added_at)
+       VALUES (?, ?, ?, datetime('now'))`,
+      [photoId, finalTagId, userId]
+    );
+
+    // Return the tag details
+    const tag = await dbGet(`SELECT id, name, type, color FROM tags WHERE id = ?`, [finalTagId]);
+
+    res.json({ success: true, tag });
+  } catch (err) {
+    console.error("❌ POST /api/photos/:id/tags error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Remove a tag from a photo
+app.delete("/api/photos/:id/tags/:tagId", authenticateToken, async (req, res) => {
+  try {
+    const photoId = validatePhotoId(req.params.id);
+    const tagId = parseInt(req.params.tagId, 10);
+
+    if (photoId === null) {
+      return res.status(400).json({ error: "Invalid photo ID" });
+    }
+
+    if (isNaN(tagId)) {
+      return res.status(400).json({ error: "Invalid tag ID" });
+    }
+
+    await dbRun(
+      `DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?`,
+      [photoId, tagId]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ DELETE /api/photos/:id/tags/:tagId error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// ---------------- AI TAG GENERATION ----------------
+
+// Check Ollama health
+app.get("/api/ai/health", authenticateToken, async (req, res) => {
+  try {
+    const isHealthy = await checkOllamaHealth();
+    res.json({
+      available: isHealthy,
+      model: process.env.OLLAMA_MODEL || 'mistral:latest'
+    });
+  } catch (err) {
+    console.error("❌ /api/ai/health error:", err);
+    res.json({ available: false, error: err.message });
+  }
+});
+
+// Generate AI tags for a single photo
+app.post("/api/photos/:id/generate-tags", authenticateToken, async (req, res) => {
+  const photoId = parseInt(req.params.id, 10);
+
+  try {
+    // Check Ollama availability
+    const ollamaOk = await checkOllamaHealth();
+    if (!ollamaOk) {
+      return res.status(503).json({ error: "AI service unavailable" });
+    }
+
+    // Get photo details
+    const photo = await dbGet("SELECT * FROM photos WHERE id = ?", [photoId]);
+    if (!photo) {
+      return res.status(404).json({ error: "Photo not found" });
+    }
+
+    // Get existing tags
+    const existingTags = await dbAll(
+      `SELECT t.name FROM tags t
+       JOIN photo_tags pt ON pt.tag_id = t.id
+       WHERE pt.photo_id = ?`,
+      [photoId]
+    );
+
+    // Get people tagged in photo
+    const people = await dbAll(
+      `SELECT p.name FROM people p
+       JOIN photo_people pp ON pp.person_id = p.id
+       WHERE pp.photo_id = ?`,
+      [photoId]
+    );
+
+    // Build metadata for AI
+    const photoData = {
+      filename: photo.filename,
+      existingTags: existingTags.map(t => t.name),
+      people: people.map(p => p.name),
+      dateTaken: photo.created_at,
+      exif: {}, // Could be extended to include EXIF data if stored
+    };
+
+    // Generate tags
+    const generatedTags = await generateTags(photoData);
+
+    if (generatedTags.length === 0) {
+      return res.json({ success: true, tags: [], message: "No new tags generated" });
+    }
+
+    // Add generated tags to database
+    const addedTags = [];
+    for (const tagName of generatedTags) {
+      // Create or get the tag
+      let tag = await dbGet(
+        "SELECT * FROM tags WHERE name = ? AND type = 'ai'",
+        [tagName]
+      );
+
+      if (!tag) {
+        const result = await dbRun(
+          "INSERT INTO tags (name, type) VALUES (?, 'ai')",
+          [tagName]
+        );
+        tag = { id: result.lastID, name: tagName, type: 'ai' };
+      }
+
+      // Check if already linked to photo
+      const existing = await dbGet(
+        "SELECT 1 FROM photo_tags WHERE photo_id = ? AND tag_id = ?",
+        [photoId, tag.id]
+      );
+
+      if (!existing) {
+        await dbRun(
+          "INSERT INTO photo_tags (photo_id, tag_id, added_by) VALUES (?, ?, 'ai')",
+          [photoId, tag.id]
+        );
+        addedTags.push(tag);
+      }
+    }
+
+    console.log(`✅ Generated ${addedTags.length} AI tags for photo ${photoId}`);
+    res.json({ success: true, tags: addedTags });
+
+  } catch (err) {
+    console.error("❌ POST /api/photos/:id/generate-tags error:", err);
+    res.status(500).json({ error: "Failed to generate tags" });
+  }
+});
+
+// Bulk generate AI tags for multiple photos
+app.post("/api/photos/bulk/generate-tags", authenticateToken, async (req, res) => {
+  const { photoIds, limit = 10 } = req.body;
+
+  if (!Array.isArray(photoIds) || photoIds.length === 0) {
+    return res.status(400).json({ error: "photoIds array required" });
+  }
+
+  // Limit batch size
+  const idsToProcess = photoIds.slice(0, Math.min(limit, 50));
+
+  try {
+    // Check Ollama availability
+    const ollamaOk = await checkOllamaHealth();
+    if (!ollamaOk) {
+      return res.status(503).json({ error: "AI service unavailable" });
+    }
+
+    const results = [];
+
+    for (const photoId of idsToProcess) {
+      try {
+        // Get photo details
+        const photo = await dbGet("SELECT * FROM photos WHERE id = ?", [photoId]);
+        if (!photo) {
+          results.push({ photoId, success: false, error: "Not found" });
+          continue;
+        }
+
+        // Get existing tags
+        const existingTags = await dbAll(
+          `SELECT t.name FROM tags t
+           JOIN photo_tags pt ON pt.tag_id = t.id
+           WHERE pt.photo_id = ?`,
+          [photoId]
+        );
+
+        // Get people tagged in photo
+        const people = await dbAll(
+          `SELECT p.name FROM people p
+           JOIN photo_people pp ON pp.person_id = p.id
+           WHERE pp.photo_id = ?`,
+          [photoId]
+        );
+
+        // Build metadata for AI
+        const photoData = {
+          filename: photo.filename,
+          existingTags: existingTags.map(t => t.name),
+          people: people.map(p => p.name),
+          dateTaken: photo.created_at,
+          exif: {},
+        };
+
+        // Generate tags
+        const generatedTags = await generateTags(photoData);
+        const addedTags = [];
+
+        for (const tagName of generatedTags) {
+          let tag = await dbGet(
+            "SELECT * FROM tags WHERE name = ? AND type = 'ai'",
+            [tagName]
+          );
+
+          if (!tag) {
+            const result = await dbRun(
+              "INSERT INTO tags (name, type) VALUES (?, 'ai')",
+              [tagName]
+            );
+            tag = { id: result.lastID, name: tagName, type: 'ai' };
+          }
+
+          const existing = await dbGet(
+            "SELECT 1 FROM photo_tags WHERE photo_id = ? AND tag_id = ?",
+            [photoId, tag.id]
+          );
+
+          if (!existing) {
+            await dbRun(
+              "INSERT INTO photo_tags (photo_id, tag_id, added_by) VALUES (?, ?, 'ai')",
+              [photoId, tag.id]
+            );
+            addedTags.push(tag);
+          }
+        }
+
+        results.push({ photoId, success: true, tagsAdded: addedTags.length });
+
+      } catch (err) {
+        results.push({ photoId, success: false, error: err.message });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    const totalTagsAdded = results.reduce((sum, r) => sum + (r.tagsAdded || 0), 0);
+
+    console.log(`✅ Bulk AI tagging: ${successCount}/${idsToProcess.length} photos, ${totalTagsAdded} tags added`);
+    res.json({
+      success: true,
+      processed: idsToProcess.length,
+      successful: successCount,
+      totalTagsAdded,
+      results
+    });
+
+  } catch (err) {
+    console.error("❌ POST /api/photos/bulk/generate-tags error:", err);
+    res.status(500).json({ error: "Failed to generate tags" });
   }
 });
 

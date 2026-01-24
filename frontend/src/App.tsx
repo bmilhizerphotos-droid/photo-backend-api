@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { fetchPhotos, fetchPeople, fetchPersonPhotos, Photo, Person } from './api';
+import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, Photo, Person, Album } from './api';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
@@ -10,12 +10,16 @@ import { PhotoMasonry } from './components/PhotoMasonry';
 import { PeopleGrid } from './components/PeopleGrid';
 import { BulkActionBar } from './components/BulkActionBar';
 import { ImageModal } from './components/ImageModal';
+import { UnidentifiedFaces } from './components/UnidentifiedFaces';
+import AlbumsGrid from './components/AlbumsGrid';
+import CreateAlbumModal from './components/CreateAlbumModal';
+import AddToAlbumModal from './components/AddToAlbumModal';
 import { ToastProvider, useToast } from './components/Toast';
 
 // Version check to verify new code is loading
-console.log("App bundle version", "2026-01-20-refactor");
+console.log("App bundle version", "2026-01-23-albums");
 
-type ViewType = 'photos' | 'people' | 'memories' | 'shared';
+type ViewType = 'photos' | 'people' | 'memories' | 'shared' | 'unidentified' | 'albums' | 'album-detail';
 
 function AppContent() {
   const { showToast } = useToast();
@@ -40,6 +44,15 @@ function AppContent() {
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
   const [personPhotos, setPersonPhotos] = useState<Photo[]>([]);
   const [personPhotosLoading, setPersonPhotosLoading] = useState(false);
+
+  // Albums state
+  const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
+  const [albumPhotos, setAlbumPhotos] = useState<Photo[]>([]);
+  const [albumPhotosLoading, setAlbumPhotosLoading] = useState(false);
+  const [albumName, setAlbumName] = useState<string>('');
+  const [albumRefreshTrigger, setAlbumRefreshTrigger] = useState(0);
+  const [showCreateAlbumModal, setShowCreateAlbumModal] = useState(false);
+  const [showAddToAlbumModal, setShowAddToAlbumModal] = useState(false);
 
   // Use the infinite scroll hook
   const {
@@ -200,6 +213,44 @@ function AppContent() {
     setSelectedPerson(null);
     setPersonPhotos([]);
   }, []);
+
+  // Handle album selection - load album photos
+  const handleSelectAlbum = useCallback(async (albumId: number) => {
+    setSelectedAlbumId(albumId);
+    setCurrentView('album-detail');
+    setAlbumPhotosLoading(true);
+    try {
+      const album = await fetchAlbum(albumId);
+      setAlbumName(album.name);
+      setAlbumPhotos(album.photos);
+    } catch (err) {
+      console.error("Failed to load album:", err);
+      showToast('error', 'Failed to load album');
+    } finally {
+      setAlbumPhotosLoading(false);
+    }
+  }, [showToast]);
+
+  // Go back to albums list
+  const handleBackToAlbums = useCallback(() => {
+    setSelectedAlbumId(null);
+    setAlbumPhotos([]);
+    setAlbumName('');
+    setCurrentView('albums');
+  }, []);
+
+  // Handle album created
+  const handleAlbumCreated = useCallback(() => {
+    setAlbumRefreshTrigger(prev => prev + 1);
+    showToast('success', 'Album created successfully');
+  }, [showToast]);
+
+  // Handle photos added to album
+  const handleAddedToAlbum = useCallback((albumId: number, albumName: string) => {
+    showToast('success', `Added ${selectedIds.size} photos to "${albumName}"`);
+    clearSelection();
+    setAlbumRefreshTrigger(prev => prev + 1);
+  }, [selectedIds.size, clearSelection, showToast]);
 
   // Load more only when sentinel hits viewport.
   // IMPORTANT: disable when there's an error or when we've paused auto loading.
@@ -365,9 +416,11 @@ function AppContent() {
             {/* Bulk Action Bar */}
             <BulkActionBar
               selectedCount={selectedIds.size}
+              selectedIds={selectedIds}
               onAction={handleBulkAction}
               onClear={clearSelection}
               isLoading={bulkActionLoading}
+              onAddToAlbum={() => setShowAddToAlbumModal(true)}
             />
           </div>
         );
@@ -422,6 +475,7 @@ function AppContent() {
                 <PeopleGrid
                   people={people}
                   onPersonClick={handlePersonClick}
+                  onUnidentifiedClick={() => setCurrentView('unidentified')}
                   loading={peopleLoading}
                 />
               </>
@@ -429,11 +483,70 @@ function AppContent() {
           </div>
         );
 
+      case 'unidentified':
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            <UnidentifiedFaces
+              onBack={() => setCurrentView('people')}
+            />
+          </div>
+        );
+
+      case 'albums':
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            <AlbumsGrid
+              onSelectAlbum={handleSelectAlbum}
+              onCreateAlbum={() => setShowCreateAlbumModal(true)}
+              refreshTrigger={albumRefreshTrigger}
+            />
+          </div>
+        );
+
+      case 'album-detail':
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            <div className="mb-6 flex items-center space-x-4">
+              <button
+                onClick={handleBackToAlbums}
+                className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span>Back to Albums</span>
+              </button>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">
+              {albumName}
+              <span className="text-gray-500 font-normal text-lg ml-2">
+                ({albumPhotos.length} photos)
+              </span>
+            </h2>
+            {albumPhotosLoading ? (
+              <div className="flex justify-center items-center py-12">
+                <div className="flex items-center space-x-2 text-gray-500">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                  <span>Loading photos...</span>
+                </div>
+              </div>
+            ) : albumPhotos.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <p>This album is empty. Add photos using the bulk action bar.</p>
+              </div>
+            ) : (
+              <PhotoMasonry
+                photos={albumPhotos}
+                onPhotoClick={handlePhotoClick}
+                selectedIds={selectedIds}
+                selectMode={selectMode}
+              />
+            )}
+          </div>
+        );
+
       case 'memories':
         return renderPlaceholderView('Memories', '📅');
-
-      case 'shared':
-        return renderPlaceholderView('Shared', '📤');
 
       default:
         return (
@@ -462,9 +575,9 @@ function AppContent() {
                   <nav className="flex space-x-8">
                     {[
                       { id: 'photos', label: 'Photos', icon: '🖼️' },
+                      { id: 'albums', label: 'Albums', icon: '📁' },
                       { id: 'people', label: 'People', icon: '👥' },
                       { id: 'memories', label: 'Memories', icon: '📅' },
-                      { id: 'shared', label: 'Shared', icon: '📤' },
                     ].map((item) => (
                       <button
                         key={item.id}
@@ -517,6 +630,21 @@ function AppContent() {
         imageUrl={selectedPhotoUrl}
         loading={modalLoading}
         onClose={closeModal}
+      />
+
+      {/* Create Album Modal */}
+      <CreateAlbumModal
+        isOpen={showCreateAlbumModal}
+        onClose={() => setShowCreateAlbumModal(false)}
+        onCreated={handleAlbumCreated}
+      />
+
+      {/* Add to Album Modal */}
+      <AddToAlbumModal
+        isOpen={showAddToAlbumModal}
+        onClose={() => setShowAddToAlbumModal(false)}
+        photoIds={Array.from(selectedIds)}
+        onAdded={handleAddedToAlbum}
       />
     </div>
   );

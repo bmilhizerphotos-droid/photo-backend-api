@@ -7,6 +7,9 @@ import { open } from "sqlite";
 const BASE_PHOTO_DIR = "G:/Photos";
 const DB_PATH = "./photo-db.sqlite";
 
+// Folders to exclude from indexing
+const EXCLUDED_FOLDERS = ['_duplicates', '.thumb', '@eaDir'];
+
 // ---------------- UTIL ----------------
 function walkDir(root, fileMap) {
   const stack = [root];
@@ -22,6 +25,9 @@ function walkDir(root, fileMap) {
     }
 
     for (const e of entries) {
+      // Skip excluded folders
+      if (EXCLUDED_FOLDERS.includes(e.name)) continue;
+
       const full = path.join(dir, e.name);
       if (e.isDirectory()) {
         stack.push(full);

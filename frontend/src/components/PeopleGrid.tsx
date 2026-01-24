@@ -1,13 +1,24 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { Person } from "../api";
+import { fetchUnidentifiedCount } from "../api";
 
 type Props = {
   people: Person[];
   onPersonClick?: (person: Person) => void;
+  onUnidentifiedClick?: () => void;
   loading?: boolean;
 };
 
-export function PeopleGrid({ people, onPersonClick, loading = false }: Props) {
+export function PeopleGrid({ people, onPersonClick, onUnidentifiedClick, loading = false }: Props) {
+  const [unidentifiedCount, setUnidentifiedCount] = useState<{ photoCount: number; faceCount: number } | null>(null);
+
+  // Load unidentified count on mount
+  useEffect(() => {
+    fetchUnidentifiedCount()
+      .then(setUnidentifiedCount)
+      .catch(console.error);
+  }, []);
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -19,7 +30,7 @@ export function PeopleGrid({ people, onPersonClick, loading = false }: Props) {
     );
   }
 
-  if (people.length === 0) {
+  if (people.length === 0 && (!unidentifiedCount || unidentifiedCount.photoCount === 0)) {
     return (
       <div className="text-center py-12 text-gray-500">
         <div className="text-6xl mb-4">👥</div>
@@ -31,6 +42,41 @@ export function PeopleGrid({ people, onPersonClick, loading = false }: Props) {
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+      {/* Unidentified card - always first if there are unidentified faces */}
+      {unidentifiedCount && unidentifiedCount.photoCount > 0 && (
+        <button
+          onClick={onUnidentifiedClick}
+          className="group relative bg-gradient-to-br from-yellow-400 to-orange-500 rounded-xl shadow-sm overflow-hidden hover:shadow-md transition-shadow"
+        >
+          {/* Icon */}
+          <div className="aspect-square flex items-center justify-center">
+            <div className="text-white">
+              <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            </div>
+          </div>
+
+          {/* Name and count */}
+          <div className="p-3 text-center bg-white bg-opacity-90">
+            <h3 className="font-medium text-gray-900">Unidentified</h3>
+            <p className="text-sm text-gray-500">
+              {unidentifiedCount.faceCount} face{unidentifiedCount.faceCount !== 1 ? 's' : ''} in {unidentifiedCount.photoCount} photo{unidentifiedCount.photoCount !== 1 ? 's' : ''}
+            </p>
+          </div>
+
+          {/* Review badge */}
+          <div className="absolute top-2 right-2 bg-white text-orange-600 text-xs font-bold px-2 py-1 rounded-full shadow">
+            Review
+          </div>
+        </button>
+      )}
+
       {people.map((person) => (
         <button
           key={person.id}
