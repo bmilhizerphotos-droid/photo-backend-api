@@ -9,6 +9,22 @@ import { dbGet, dbAll, dbRun } from "./db.js";
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
 import { fileURLToPath } from "url";
+import { ApiError, errorHandler } from "./utils/errors.js";
+import { param, body } from "express-validator";
+import {
+  photoIdParam,
+  albumIdParam,
+  personIdParam,
+  faceIdParam,
+  tagIdParam,
+  paginationQuery,
+  photoIdsBody,
+  albumNameBody,
+  personNameBody,
+  personIdBody,
+  photoIdBody,
+  validate
+} from "./utils/validators.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -132,6 +148,31 @@ function setCachedPath(filename, filePath) {
   filePathCache.set(filename.toLowerCase(), { path: filePath, timestamp: Date.now() });
 }
 
+/**
+ * Get photo path from database, with fallback to search
+ * Updates database with found path to avoid future searches
+ */
+async function getPhotoPathFromDb(photoId) {
+  const row = await dbGet(
+    "SELECT full_path, filename FROM photos WHERE id = ?",
+    [photoId]
+  );
+
+  if (!row) return null;
+
+  // Security: Validate database path is within PHOTO_ROOT
+  if (row.full_path && isPathWithinRoot(row.full_path) && fs.existsSync(row.full_path)) {
+    return row.full_path;
+  }
+
+  // Fallback to search, then update DB with found path
+  const found = await findFileAsync(PHOTO_ROOT, row.filename);
+  if (found) {
+    await dbRun("UPDATE photos SET full_path = ? WHERE id = ?", [found, photoId]);
+  }
+  return found;
+}
+
 // Async file search with caching
 async function findFileAsync(root, targetName) {
   const targetLower = String(targetName).toLowerCase();
@@ -238,13 +279,10 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
 });
 
 // ---------------- THUMBNAILS (PROTECTED) ----------------
-app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
+app.get("/thumbnails/:id", authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const id = validatePhotoId(req.params.id);
-    if (id === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-    
+    const id = req.params.id;
+
     const row = await dbGet("SELECT filename, full_path, thumbnail_path FROM photos WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "Photo not found" });
 
@@ -327,13 +365,10 @@ app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
 // ---------------- DISPLAY JPEG (NEW, PROTECTED) ----------------
 // Always returns a browser-friendly JPEG for modal viewing.
 // Added /image route as alias to bypass Cloudflare cache issues
-app.get(["/display/:id", "/image/:id"], authenticateToken, async (req, res) => {
+app.get(["/display/:id", "/image/:id"], authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const id = validatePhotoId(req.params.id);
-    if (id === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-    
+    const id = req.params.id;
+
     const row = await dbGet("SELECT filename, full_path, thumbnail_path FROM photos WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "Photo not found" });
 
@@ -420,13 +455,10 @@ app.get(["/display/:id", "/image/:id"], authenticateToken, async (req, res) => {
 
 // ---------------- ORIGINAL FILE (OPTIONAL DOWNLOAD, PROTECTED) ----------------
 // Keeps your original behavior available.
-app.get("/photos/:id", authenticateToken, async (req, res) => {
+app.get("/photos/:id", authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const id = validatePhotoId(req.params.id);
-    if (id === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-    
+    const id = req.params.id;
+
     const row = await dbGet("SELECT filename FROM photos WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "Photo not found" });
 
@@ -560,12 +592,9 @@ app.get("/api/people", authenticateToken, async (req, res) => {
 });
 
 // Get a single person with their photos
-app.get("/api/people/:id", authenticateToken, async (req, res) => {
+app.get("/api/people/:id", authenticateToken, personIdParam, validate, async (req, res) => {
   try {
-    const id = validatePhotoId(req.params.id);
-    if (id === null) {
-      return res.status(400).json({ error: "Invalid person ID" });
-    }
+    const id = req.params.id;
 
     const person = await dbGet("SELECT * FROM people WHERE id = ?", [id]);
     if (!person) {
@@ -613,15 +642,11 @@ app.get("/api/people/:id", authenticateToken, async (req, res) => {
 });
 
 // Get photos for a person (paginated)
-app.get("/api/people/:id/photos", authenticateToken, async (req, res) => {
+app.get("/api/people/:id/photos", authenticateToken, personIdParam, paginationQuery, validate, async (req, res) => {
   try {
-    const id = validatePhotoId(req.params.id);
-    if (id === null) {
-      return res.status(400).json({ error: "Invalid person ID" });
-    }
-
-    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
-    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const id = req.params.id;
+    const limit = req.query.limit || 50;
+    const offset = req.query.offset || 0;
 
     const photos = await dbAll(
       `
@@ -708,12 +733,9 @@ app.get("/api/faces/unidentified", authenticateToken, async (req, res) => {
 });
 
 // Get detected faces for a specific photo
-app.get("/api/photos/:id/faces", authenticateToken, async (req, res) => {
+app.get("/api/photos/:id/faces", authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
+    const photoId = req.params.id;
 
     const faces = await dbAll(`
       SELECT
@@ -750,17 +772,10 @@ app.get("/api/photos/:id/faces", authenticateToken, async (req, res) => {
 });
 
 // Assign a face to a person
-app.post("/api/faces/:faceId/identify", authenticateToken, async (req, res) => {
+app.post("/api/faces/:faceId/identify", authenticateToken, faceIdParam, personIdBody, validate, async (req, res) => {
   try {
-    const faceId = validatePhotoId(req.params.faceId);
-    if (faceId === null) {
-      return res.status(400).json({ error: "Invalid face ID" });
-    }
-
+    const faceId = req.params.faceId;
     const { personId } = req.body;
-    if (!personId || !Number.isInteger(Number(personId))) {
-      return res.status(400).json({ error: "Valid personId is required" });
-    }
 
     // Verify the face exists
     const face = await dbGet("SELECT * FROM face_embeddings WHERE id = ?", [faceId]);
@@ -821,17 +836,10 @@ app.post("/api/faces/:faceId/identify", authenticateToken, async (req, res) => {
 });
 
 // Create a new person from a face
-app.post("/api/faces/:faceId/create-person", authenticateToken, async (req, res) => {
+app.post("/api/faces/:faceId/create-person", authenticateToken, faceIdParam, personNameBody, validate, async (req, res) => {
   try {
-    const faceId = validatePhotoId(req.params.faceId);
-    if (faceId === null) {
-      return res.status(400).json({ error: "Invalid face ID" });
-    }
-
+    const faceId = req.params.faceId;
     const { name } = req.body;
-    if (!name || typeof name !== "string" || !name.trim()) {
-      return res.status(400).json({ error: "Name is required" });
-    }
 
     // Verify the face exists
     const face = await dbGet("SELECT * FROM face_embeddings WHERE id = ?", [faceId]);
@@ -884,17 +892,10 @@ app.post("/api/faces/:faceId/create-person", authenticateToken, async (req, res)
 });
 
 // Manual tag - add a person to a photo without face detection
-app.post("/api/photos/:id/tag", authenticateToken, async (req, res) => {
+app.post("/api/photos/:id/tag", authenticateToken, photoIdParam, personIdBody, validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-
+    const photoId = req.params.id;
     const { personId } = req.body;
-    if (!personId || !Number.isInteger(Number(personId))) {
-      return res.status(400).json({ error: "Valid personId is required" });
-    }
 
     // Verify the photo exists
     const photo = await dbGet("SELECT id FROM photos WHERE id = ?", [photoId]);
@@ -934,14 +935,10 @@ app.post("/api/photos/:id/tag", authenticateToken, async (req, res) => {
 });
 
 // Remove a tag from a photo
-app.delete("/api/photos/:id/tag/:personId", authenticateToken, async (req, res) => {
+app.delete("/api/photos/:id/tag/:personId", authenticateToken, photoIdParam, param('personId').isInt({ min: 1 }).toInt(), validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    const personId = validatePhotoId(req.params.personId);
-
-    if (photoId === null || personId === null) {
-      return res.status(400).json({ error: "Invalid photo or person ID" });
-    }
+    const photoId = req.params.id;
+    const personId = req.params.personId;
 
     // Remove from photo_people junction table
     const result = await dbRun(
@@ -1092,12 +1089,9 @@ app.get("/api/faces/unidentified/count", authenticateToken, async (req, res) => 
 });
 
 // Get people tagged in a specific photo
-app.get("/api/photos/:id/people", authenticateToken, async (req, res) => {
+app.get("/api/photos/:id/people", authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
+    const photoId = req.params.id;
 
     const people = await dbAll(`
       SELECT
@@ -1573,12 +1567,9 @@ app.post("/api/tags", authenticateToken, async (req, res) => {
 });
 
 // Get tags for a specific photo
-app.get("/api/photos/:id/tags", authenticateToken, async (req, res) => {
+app.get("/api/photos/:id/tags", authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
+    const photoId = req.params.id;
 
     const tags = await dbAll(`
       SELECT t.id, t.name, t.type, t.color, pt.added_by, pt.added_at
@@ -1596,13 +1587,9 @@ app.get("/api/photos/:id/tags", authenticateToken, async (req, res) => {
 });
 
 // Add a tag to a photo
-app.post("/api/photos/:id/tags", authenticateToken, async (req, res) => {
+app.post("/api/photos/:id/tags", authenticateToken, photoIdParam, validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-
+    const photoId = req.params.id;
     const { tagId, tagName, tagType = 'user' } = req.body;
     const userId = req.user?.uid;
 
@@ -1648,18 +1635,10 @@ app.post("/api/photos/:id/tags", authenticateToken, async (req, res) => {
 });
 
 // Remove a tag from a photo
-app.delete("/api/photos/:id/tags/:tagId", authenticateToken, async (req, res) => {
+app.delete("/api/photos/:id/tags/:tagId", authenticateToken, photoIdParam, tagIdParam, validate, async (req, res) => {
   try {
-    const photoId = validatePhotoId(req.params.id);
-    const tagId = parseInt(req.params.tagId, 10);
-
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-
-    if (isNaN(tagId)) {
-      return res.status(400).json({ error: "Invalid tag ID" });
-    }
+    const photoId = req.params.id;
+    const tagId = req.params.tagId;
 
     await dbRun(
       `DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?`,
@@ -1889,6 +1868,9 @@ app.post("/api/photos/bulk/generate-tags", authenticateToken, async (req, res) =
     res.status(500).json({ error: "Failed to generate tags" });
   }
 });
+
+// ---------------- ERROR HANDLER ----------------
+app.use(errorHandler);
 
 // ---------------- START ----------------
 app.listen(PORT, () => {

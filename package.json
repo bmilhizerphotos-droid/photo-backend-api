@@ -10,13 +10,16 @@
     "scan-faces": "node scan-faces.js",
     "scan-faces:test": "node scan-faces.js --limit 10 --verbose",
     "scan-duplicates": "node scan-duplicates.js",
-    "scan-duplicates:test": "node scan-duplicates.js --limit 100 --dry-run --verbose"
+    "scan-duplicates:test": "node scan-duplicates.js --limit 100 --dry-run --verbose",
+    "populate-paths": "node populate-photo-paths.js",
+    "populate-paths:test": "node populate-photo-paths.js --limit 10 --verbose --dry-run"
   },
   "dependencies": {
     "canvas": "^2.11.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "express": "^4.22.1",
+    "express-validator": "^7.3.1",
     "firebase-admin": "^12.0.0",
     "imghash": "^1.1.2",
     "onnxruntime-node": "^1.17.0",

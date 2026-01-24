@@ -234,6 +234,7 @@ await dbRun(`CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_tags_type ON tags(type)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_tags_photo ON photo_tags(photo_id)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_tags_tag ON photo_tags(tag_id)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_photos_created ON photos(created_at DESC)`);
 
 console.log("✅ SQLite DB opened:", path.join(__dirname, "photo-db.sqlite"));
 
