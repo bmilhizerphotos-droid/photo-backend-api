@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, Photo, Person, Album } from './api';
+import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, fetchAlbums, Photo, Person, Album } from './api';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
@@ -15,11 +15,10 @@ import AlbumsGrid from './components/AlbumsGrid';
 import CreateAlbumModal from './components/CreateAlbumModal';
 import AddToAlbumModal from './components/AddToAlbumModal';
 import { ToastProvider, useToast } from './components/Toast';
+import Sidebar, { AppView } from './components/Sidebar';
 
 // Version check to verify new code is loading
-console.log("App bundle version", "2026-01-23-albums");
-
-type ViewType = 'photos' | 'people' | 'memories' | 'shared' | 'unidentified' | 'albums' | 'album-detail';
+console.log("App bundle version", "2026-01-24-sidebar");
 
 function AppContent() {
   const { showToast } = useToast();
@@ -30,7 +29,7 @@ function AppContent() {
   // Modal state
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string>('');
-  const [currentView, setCurrentView] = useState<ViewType>('photos');
+  const [currentView, setCurrentView] = useState<AppView>('photos');
   const [modalLoading, setModalLoading] = useState(false);
 
   // When a photo fetch fails, pause infinite auto-loading to avoid hammering auth/token endpoints.
@@ -46,6 +45,7 @@ function AppContent() {
   const [personPhotosLoading, setPersonPhotosLoading] = useState(false);
 
   // Albums state
+  const [albums, setAlbums] = useState<Album[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
   const [albumPhotos, setAlbumPhotos] = useState<Photo[]>([]);
   const [albumPhotosLoading, setAlbumPhotosLoading] = useState(false);
@@ -77,6 +77,25 @@ function AppContent() {
   useEffect(() => {
     if (error) setAutoLoadPaused(true);
   }, [error]);
+
+  // Load albums for sidebar when user is authenticated
+  useEffect(() => {
+    if (!user) {
+      setAlbums([]);
+      return;
+    }
+
+    const loadAlbums = async () => {
+      try {
+        const data = await fetchAlbums();
+        setAlbums(data);
+      } catch (err) {
+        console.error("Failed to load albums for sidebar:", err);
+      }
+    };
+
+    loadAlbums();
+  }, [user, albumRefreshTrigger]);
 
   const retryLoad = useCallback(async () => {
     // Manual retry: clear pause + reset paging + load one page.
@@ -291,71 +310,19 @@ function AppContent() {
     setModalLoading(false);
   };
 
-  // Placeholder content for other views
-  const renderPlaceholderView = (title: string, icon: string) => (
+  // Placeholder content for views that are not yet implemented
+  const renderPlaceholderView = (title: string, icon: string, description: string) => (
     <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-400">
       <div className="text-6xl mb-4">{icon}</div>
-      <h2 className="text-xl font-medium mb-2">{title}</h2>
+      <h2 className="text-xl font-medium mb-2 text-gray-600">{title}</h2>
       <p className="text-center max-w-md">
-        This feature is coming soon. For now, enjoy browsing your photo collection!
+        {description}
       </p>
     </div>
   );
 
   // Main content renderer using switch pattern
   const renderView = () => {
-    // Handle authentication states first
-    if (authLoading) {
-      return (
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="flex items-center space-x-2 text-gray-500">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
-            <span>Loading...</span>
-          </div>
-        </div>
-      );
-    }
-
-    if (!user) {
-      return (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-          <div className="max-w-md">
-            <div className="text-6xl mb-6">📸</div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">
-              Welcome to Family Photos
-            </h2>
-            <p className="text-gray-600 mb-8">
-              Sign in with Google to view and manage your family photo collection.
-            </p>
-            <button
-              onClick={signIn}
-              className="bg-blue-600 text-white px-8 py-3 rounded-lg text-lg font-medium hover:bg-blue-700 transition-colors flex items-center space-x-3 mx-auto"
-            >
-              <svg className="w-6 h-6" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-              </svg>
-              <span>Sign In with Google</span>
-            </button>
-            <p className="text-sm text-gray-500 mt-4 text-center">
-              Robust authentication (works in all browsers)
-            </p>
-            {authError && (
-              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-sm text-red-800">
-                  <strong>Authentication Error:</strong><br/>
-                  {authError}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    // Handle authenticated views
     switch (currentView) {
       case 'photos':
         return (
@@ -425,6 +392,13 @@ function AppContent() {
           </div>
         );
 
+      case 'favorites':
+        return renderPlaceholderView(
+          'Favorites',
+          '❤️',
+          'Your favorite photos will appear here. Mark photos as favorites to quickly find them later.'
+        );
+
       case 'people':
         return (
           <div className="px-4 sm:px-6 lg:px-8">
@@ -492,6 +466,34 @@ function AppContent() {
           </div>
         );
 
+      case 'memories':
+        return renderPlaceholderView(
+          'Memories',
+          '📅',
+          'Relive your memories from years past. Photos from this day in previous years will appear here.'
+        );
+
+      case 'shared':
+        return renderPlaceholderView(
+          'Shared Albums',
+          '🔗',
+          'Albums shared with you and albums you\'ve shared with others will appear here.'
+        );
+
+      case 'import':
+        return renderPlaceholderView(
+          'Import Photos',
+          '📤',
+          'Upload new photos to your library. Drag and drop files or click to browse.'
+        );
+
+      case 'trash':
+        return renderPlaceholderView(
+          'Trash',
+          '🗑️',
+          'Recently deleted photos will appear here for 30 days before being permanently removed.'
+        );
+
       case 'albums':
         return (
           <div className="px-4 sm:px-6 lg:px-8">
@@ -545,9 +547,6 @@ function AppContent() {
           </div>
         );
 
-      case 'memories':
-        return renderPlaceholderView('Memories', '📅');
-
       default:
         return (
           <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-400">
@@ -561,68 +560,92 @@ function AppContent() {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <h1 className="text-xl font-semibold text-gray-900">Photos</h1>
-            <div className="flex items-center space-x-4">
-              {user ? (
-                <>
-                  {/* Navigation */}
-                  <nav className="flex space-x-8">
-                    {[
-                      { id: 'photos', label: 'Photos', icon: '🖼️' },
-                      { id: 'albums', label: 'Albums', icon: '📁' },
-                      { id: 'people', label: 'People', icon: '👥' },
-                      { id: 'memories', label: 'Memories', icon: '📅' },
-                    ].map((item) => (
-                      <button
-                        key={item.id}
-                        onClick={() => setCurrentView(item.id as ViewType)}
-                        className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                          currentView === item.id
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                        }`}
-                      >
-                        <span>{item.icon}</span>
-                        <span>{item.label}</span>
-                      </button>
-                    ))}
-                  </nav>
+  // Loading state
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex items-center space-x-2 text-gray-500">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+          <span className="text-lg">Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
-                  {/* User Info & Sign Out */}
-                  <div className="flex items-center space-x-3">
-                    <Avatar photoURL={user.photoURL} name={user.displayName} />
-                    <span className="text-sm text-gray-700">{user.displayName}</span>
-                    <button
-                      onClick={handleSignOut}
-                      className="text-sm text-gray-600 hover:text-gray-900 px-3 py-1 rounded-md hover:bg-gray-100"
-                    >
-                      Sign Out
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <button
-                  onClick={signIn}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-                >
-                  Sign In with Google
-                </button>
-              )}
+  // Not authenticated - show sign in
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center text-center px-4">
+        <div className="max-w-md">
+          <div className="text-8xl mb-6">📸</div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-4">
+            Family Photos
+          </h1>
+          <p className="text-gray-600 mb-8">
+            Sign in with Google to view and manage your family photo collection.
+          </p>
+          <button
+            onClick={signIn}
+            className="bg-blue-600 text-white px-8 py-3 rounded-lg text-lg font-medium hover:bg-blue-700 transition-colors flex items-center space-x-3 mx-auto"
+          >
+            <svg className="w-6 h-6" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+              <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            <span>Sign In with Google</span>
+          </button>
+          {authError && (
+            <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm text-red-800">
+                <strong>Authentication Error:</strong><br/>
+                {authError}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Authenticated - show main app with sidebar
+  return (
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Sidebar */}
+      <Sidebar
+        view={currentView}
+        onChangeView={setCurrentView}
+        albums={albums}
+        selectedAlbumId={selectedAlbumId}
+        onSelectAlbum={handleSelectAlbum}
+        onCreateAlbum={() => setShowCreateAlbumModal(true)}
+      />
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
+          <div className="px-6 h-14 flex items-center justify-end">
+            {/* User Info & Sign Out */}
+            <div className="flex items-center space-x-3">
+              <Avatar photoURL={user.photoURL} name={user.displayName} />
+              <span className="text-sm text-gray-700">{user.displayName}</span>
+              <button
+                onClick={handleSignOut}
+                className="text-sm text-gray-600 hover:text-gray-900 px-3 py-1 rounded-md hover:bg-gray-100"
+              >
+                Sign Out
+              </button>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Main Content */}
-      <main className="py-8">
-        {renderView()}
-      </main>
+        {/* Main Content */}
+        <main className="flex-1 py-6 overflow-auto">
+          {renderView()}
+        </main>
+      </div>
 
       {/* Full-Screen Modal */}
       <ImageModal
