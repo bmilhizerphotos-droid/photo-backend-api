@@ -6,6 +6,7 @@ export type AppView =
   | "favorites"
   | "people"
   | "memories"
+  | "memory-detail"
   | "shared"
   | "import"
   | "trash"

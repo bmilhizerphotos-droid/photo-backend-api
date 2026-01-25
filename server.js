@@ -8,6 +8,7 @@ import sharp from "sharp";
 import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback } from "./db.js";
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
+import { generateMemories, generateNarratives } from "./memory-generator.js";
 import { fileURLToPath } from "url";
 import { ApiError, errorHandler } from "./utils/errors.js";
 import { param, body } from "express-validator";
@@ -1884,6 +1885,170 @@ app.post("/api/photos/bulk/generate-tags", authenticateToken, async (req, res) =
   } catch (err) {
     console.error("❌ POST /api/photos/bulk/generate-tags error:", err);
     res.status(500).json({ error: "Failed to generate tags" });
+  }
+});
+
+// ========== MEMORIES ENDPOINTS ==========
+
+// In-memory lock to prevent concurrent generation runs
+let memoriesGenerating = false;
+
+// List all memories (newest first)
+app.get("/api/memories", authenticateToken, async (req, res) => {
+  try {
+    const memories = await dbAll(`
+      SELECT
+        m.id,
+        m.title,
+        m.narrative,
+        m.cover_photo_id,
+        m.event_date_start,
+        m.event_date_end,
+        m.location_label,
+        m.photo_count
+      FROM memories m
+      ORDER BY m.event_date_start DESC
+    `);
+
+    const token = req.headers.authorization?.substring(7) || req.query.token;
+    const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+    res.json(
+      memories.map((m) => ({
+        id: m.id,
+        title: m.title,
+        narrative: m.narrative,
+        coverPhotoUrl: m.cover_photo_id
+          ? `/thumbnails/${m.cover_photo_id}?${authParams}`
+          : null,
+        photoCount: m.photo_count,
+        eventDateStart: m.event_date_start,
+        eventDateEnd: m.event_date_end,
+        locationLabel: m.location_label,
+      }))
+    );
+  } catch (err) {
+    console.error("❌ GET /api/memories error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Get a single memory with its photos
+app.get("/api/memories/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid memory ID" });
+    }
+
+    const memory = await dbGet(`
+      SELECT
+        m.id,
+        m.title,
+        m.narrative,
+        m.cover_photo_id,
+        m.event_date_start,
+        m.event_date_end,
+        m.location_label,
+        m.photo_count
+      FROM memories m
+      WHERE m.id = ?
+    `, [id]);
+
+    if (!memory) {
+      return res.status(404).json({ error: "Memory not found" });
+    }
+
+    const photos = await dbAll(`
+      SELECT
+        p.id,
+        p.filename,
+        p.is_favorite,
+        p.created_at
+      FROM photos p
+      JOIN memory_photos mp ON p.id = mp.photo_id
+      WHERE mp.memory_id = ?
+      ORDER BY p.id
+    `, [id]);
+
+    const token = req.headers.authorization?.substring(7) || req.query.token;
+    const cacheBuster = String(Date.now());
+    const authParams = `token=${encodeURIComponent(token)}&v=${cacheBuster}`;
+
+    res.json({
+      id: memory.id,
+      title: memory.title,
+      narrative: memory.narrative,
+      coverPhotoUrl: memory.cover_photo_id
+        ? `/thumbnails/${memory.cover_photo_id}?${authParams}`
+        : null,
+      photoCount: memory.photo_count,
+      eventDateStart: memory.event_date_start,
+      eventDateEnd: memory.event_date_end,
+      locationLabel: memory.location_label,
+      photos: photos.map((p) => ({
+        id: p.id,
+        filename: p.filename,
+        thumbnailUrl: `/thumbnails/${p.id}?${authParams}`,
+        fullUrl: `/thumbnails/${p.id}?full=true&${authParams}`,
+        isFavorite: Boolean(p.is_favorite),
+        createdAt: p.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error("❌ GET /api/memories/:id error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Trigger memory generation (clustering + narratives)
+app.post("/api/memories/generate", authenticateToken, async (req, res) => {
+  if (memoriesGenerating) {
+    return res.status(409).json({ error: "Memory generation already in progress" });
+  }
+
+  memoriesGenerating = true;
+  try {
+    console.log("🧠 Starting memory generation...");
+
+    // Step 1: Cluster photos into events
+    const clusterResult = await generateMemories();
+    console.log(`✅ Clustering: ${clusterResult.created} created, ${clusterResult.skipped} skipped`);
+
+    // Step 2: Generate AI narratives for new memories
+    const narrativeCount = await generateNarratives();
+    console.log(`✅ Narratives: ${narrativeCount} generated`);
+
+    res.json({
+      created: clusterResult.created,
+      skipped: clusterResult.skipped,
+      narrativesGenerated: narrativeCount,
+    });
+  } catch (err) {
+    console.error("❌ POST /api/memories/generate error:", err);
+    res.status(500).json({ error: "Memory generation failed" });
+  } finally {
+    memoriesGenerating = false;
+  }
+});
+
+// Delete a memory
+app.delete("/api/memories/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid memory ID" });
+    }
+
+    const result = await dbRun("DELETE FROM memories WHERE id = ?", [id]);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Memory not found" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ DELETE /api/memories/:id error:", err);
+    res.status(500).json({ error: "Database error" });
   }
 });
 

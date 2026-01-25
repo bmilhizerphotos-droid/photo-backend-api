@@ -229,6 +229,35 @@ try {
   // Column already exists, ignore
 }
 
+// Memories table - stores AI-generated event memories
+await dbRun(`
+  CREATE TABLE IF NOT EXISTS memories (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    title         TEXT,
+    narrative     TEXT,
+    cover_photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL,
+    event_date_start TEXT,
+    event_date_end   TEXT,
+    location_label   TEXT,
+    center_lat       REAL,
+    center_lng       REAL,
+    photo_count      INTEGER DEFAULT 0,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Memory-photos junction table
+await dbRun(`
+  CREATE TABLE IF NOT EXISTS memory_photos (
+    memory_id INTEGER NOT NULL,
+    photo_id  INTEGER NOT NULL,
+    PRIMARY KEY (memory_id, photo_id),
+    FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE,
+    FOREIGN KEY (photo_id)  REFERENCES photos(id)  ON DELETE CASCADE
+  )
+`);
+
 // Create indexes for performance
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photos_favorite ON photos(is_favorite)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photos_filename ON photos(filename)`);
@@ -248,6 +277,9 @@ await dbRun(`CREATE INDEX IF NOT EXISTS idx_tags_type ON tags(type)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_tags_photo ON photo_tags(photo_id)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_tags_tag ON photo_tags(tag_id)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_photos_created ON photos(created_at DESC)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_memories_dates ON memories(event_date_start)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_memory_photos_memory ON memory_photos(memory_id)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_memory_photos_photo ON memory_photos(photo_id)`);
 
 console.log("✅ SQLite DB opened:", path.join(__dirname, "photo-db.sqlite"));
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, fetchAlbums, Photo, Person, Album } from './api';
+import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, fetchAlbums, fetchMemory, Photo, Person, Album } from './api';
+import MemoriesGrid from './components/MemoriesGrid';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
@@ -53,6 +54,12 @@ function AppContent() {
   const [albumRefreshTrigger, setAlbumRefreshTrigger] = useState(0);
   const [showCreateAlbumModal, setShowCreateAlbumModal] = useState(false);
   const [showAddToAlbumModal, setShowAddToAlbumModal] = useState(false);
+
+  // Memories state
+  const [memoryPhotos, setMemoryPhotos] = useState<Photo[]>([]);
+  const [memoryPhotosLoading, setMemoryPhotosLoading] = useState(false);
+  const [memoryTitle, setMemoryTitle] = useState<string>('');
+  const [memoryNarrative, setMemoryNarrative] = useState<string | null>(null);
 
   // Use the infinite scroll hook
   const {
@@ -264,6 +271,31 @@ function AppContent() {
     showToast('success', 'Album created successfully');
   }, [showToast]);
 
+  // Handle memory selection - load memory photos
+  const handleSelectMemory = useCallback(async (memoryId: number) => {
+    setCurrentView('memory-detail');
+    setMemoryPhotosLoading(true);
+    try {
+      const memory = await fetchMemory(memoryId);
+      setMemoryTitle(memory.title || 'Untitled Memory');
+      setMemoryNarrative(memory.narrative);
+      setMemoryPhotos(memory.photos);
+    } catch (err) {
+      console.error("Failed to load memory:", err);
+      showToast('error', 'Failed to load memory');
+    } finally {
+      setMemoryPhotosLoading(false);
+    }
+  }, [showToast]);
+
+  // Go back to memories list
+  const handleBackToMemories = useCallback(() => {
+    setMemoryPhotos([]);
+    setMemoryTitle('');
+    setMemoryNarrative(null);
+    setCurrentView('memories');
+  }, []);
+
   // Handle photos added to album
   const handleAddedToAlbum = useCallback((albumId: number, albumName: string) => {
     showToast('success', `Added ${selectedIds.size} photos to "${albumName}"`);
@@ -467,10 +499,55 @@ function AppContent() {
         );
 
       case 'memories':
-        return renderPlaceholderView(
-          'Memories',
-          '📅',
-          'Relive your memories from years past. Photos from this day in previous years will appear here.'
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            <MemoriesGrid onSelectMemory={handleSelectMemory} />
+          </div>
+        );
+
+      case 'memory-detail':
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            <div className="mb-6 flex items-center space-x-4">
+              <button
+                onClick={handleBackToMemories}
+                className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span>Back to Memories</span>
+              </button>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-1">
+              {memoryTitle}
+            </h2>
+            {memoryNarrative && (
+              <p className="text-gray-600 mb-4 max-w-2xl">{memoryNarrative}</p>
+            )}
+            <p className="text-gray-500 text-sm mb-4">
+              {memoryPhotos.length} {memoryPhotos.length === 1 ? 'photo' : 'photos'}
+            </p>
+            {memoryPhotosLoading ? (
+              <div className="flex justify-center items-center py-12">
+                <div className="flex items-center space-x-2 text-gray-500">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                  <span>Loading photos...</span>
+                </div>
+              </div>
+            ) : memoryPhotos.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <p>No photos in this memory.</p>
+              </div>
+            ) : (
+              <PhotoMasonry
+                photos={memoryPhotos}
+                onPhotoClick={handlePhotoClick}
+                selectedIds={selectedIds}
+                selectMode={selectMode}
+              />
+            )}
+          </div>
         );
 
       case 'shared':

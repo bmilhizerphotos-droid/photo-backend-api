@@ -842,6 +842,143 @@ export async function removePhotoFromAlbum(albumId: number, photoId: number): Pr
   return res.json();
 }
 
+// ============== MEMORIES API ==============
+
+export interface Memory {
+  id: number;
+  title: string;
+  narrative: string | null;
+  coverPhotoUrl: string | null;
+  photoCount: number;
+  eventDateStart: string;
+  eventDateEnd: string;
+  locationLabel: string | null;
+}
+
+export interface MemoryWithPhotos extends Memory {
+  photos: Photo[];
+}
+
+/**
+ * Fetch all memories (newest first)
+ */
+export async function fetchMemories(): Promise<Memory[]> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/memories"), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch memories: ${res.status} ${res.statusText}`);
+  }
+
+  const memories: Memory[] = await res.json();
+
+  // The server already includes auth tokens in coverPhotoUrl via query params,
+  // but for dev proxy we need to ensure the URL works.
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+
+  return memories.map(memory => {
+    let coverPhotoUrl = memory.coverPhotoUrl;
+    if (coverPhotoUrl && !isDev && baseFromEnv) {
+      coverPhotoUrl = `${baseFromEnv}${coverPhotoUrl}`;
+    }
+    return { ...memory, coverPhotoUrl };
+  });
+}
+
+/**
+ * Fetch a single memory with its photos
+ */
+export async function fetchMemory(id: number): Promise<MemoryWithPhotos> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl(`/api/memories/${id}`), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch memory: ${res.status} ${res.statusText}`);
+  }
+
+  const memory = await res.json();
+
+  // Authenticate photo URLs for production
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+
+  let coverPhotoUrl = memory.coverPhotoUrl;
+  if (coverPhotoUrl && !isDev && baseFromEnv) {
+    coverPhotoUrl = `${baseFromEnv}${coverPhotoUrl}`;
+  }
+
+  const photos = memory.photos.map((photo: Photo) => {
+    let thumbnailUrl = photo.thumbnailUrl;
+    let fullUrl = photo.fullUrl;
+    if (!isDev && baseFromEnv) {
+      if (thumbnailUrl) thumbnailUrl = `${baseFromEnv}${thumbnailUrl}`;
+      if (fullUrl) fullUrl = `${baseFromEnv}${fullUrl}`;
+    }
+    return { ...photo, thumbnailUrl, fullUrl };
+  });
+
+  return { ...memory, coverPhotoUrl, photos };
+}
+
+/**
+ * Trigger memory generation (clustering + narrative generation)
+ */
+export async function generateMemoriesApi(): Promise<{ created: number; skipped: number; narrativesGenerated: number }> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/memories/generate"), {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to generate memories: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Delete a memory
+ */
+export async function deleteMemory(id: number): Promise<{ success: boolean }> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl(`/api/memories/${id}`), {
+    method: "DELETE",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to delete memory: ${res.status}`);
+  }
+
+  return res.json();
+}
+
 // ============== TAGS API ==============
 
 export interface Tag {
