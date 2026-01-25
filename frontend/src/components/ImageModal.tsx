@@ -70,9 +70,11 @@ interface ImageModalProps {
   imageUrl: string;
   loading: boolean;
   onClose: () => void;
+  onPrevious?: () => void;
+  onNext?: () => void;
 }
 
-export function ImageModal({ photo, imageUrl, loading, onClose }: ImageModalProps) {
+export function ImageModal({ photo, imageUrl, loading, onClose, onPrevious, onNext }: ImageModalProps) {
   const [taggedPeople, setTaggedPeople] = useState<Person[]>([]);
   const [faceCount, setFaceCount] = useState(0);
   const [showTagModal, setShowTagModal] = useState(false);
@@ -145,17 +147,29 @@ export function ImageModal({ photo, imageUrl, loading, onClose }: ImageModalProp
     return () => clearTimeout(debounce);
   }, [tagInput, tags]);
 
-  // Close modal on Escape key
+  // Handle keyboard navigation (Escape, left/right arrows)
   useEffect(() => {
     if (!photo) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !showTagModal) onClose();
+      if (showTagModal) return;
+
+      switch (e.key) {
+        case 'Escape':
+          onClose();
+          break;
+        case 'ArrowLeft':
+          onPrevious?.();
+          break;
+        case 'ArrowRight':
+          onNext?.();
+          break;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [photo, onClose, showTagModal]);
+  }, [photo, onClose, onPrevious, onNext, showTagModal]);
 
   const handleTagUpdate = useCallback(async () => {
     if (!photo) return;
