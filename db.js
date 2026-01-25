@@ -7,7 +7,7 @@ const __dirname = path.dirname(__filename);
 
 // Create database connection
 const db = new sqlite3.Database(path.join(__dirname, "photo-db.sqlite"));
-db.configure("busy_timeout", 5000); // Configure busy timeout to 5 seconds
+db.run("PRAGMA busy_timeout = 5000"); // Set busy timeout to 5 seconds
 
 // Promisify database operations
 const dbRun = (sql, params = []) => {
