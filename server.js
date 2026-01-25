@@ -1979,6 +1979,7 @@ app.get("/api/memories/:id", authenticateToken, async (req, res) => {
       id: memory.id,
       title: memory.title,
       narrative: memory.narrative,
+      coverPhotoId: memory.cover_photo_id,
       coverPhotoUrl: memory.cover_photo_id
         ? `/thumbnails/${memory.cover_photo_id}?${authParams}`
         : null,
@@ -1997,6 +1998,74 @@ app.get("/api/memories/:id", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error("❌ GET /api/memories/:id error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Update a memory (title, narrative, location, cover photo)
+app.put("/api/memories/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid memory ID" });
+    }
+
+    const memory = await dbGet("SELECT id FROM memories WHERE id = ?", [id]);
+    if (!memory) {
+      return res.status(404).json({ error: "Memory not found" });
+    }
+
+    const { title, narrative, locationLabel, coverPhotoId } = req.body;
+
+    // Build update query dynamically
+    const updates = [];
+    const params = [];
+
+    if (title !== undefined) {
+      if (typeof title !== 'string' || title.trim().length === 0) {
+        return res.status(400).json({ error: "Title cannot be empty" });
+      }
+      updates.push('title = ?');
+      params.push(title.trim());
+    }
+
+    if (narrative !== undefined) {
+      updates.push('narrative = ?');
+      params.push(narrative?.trim() || null);
+    }
+
+    if (locationLabel !== undefined) {
+      updates.push('location_label = ?');
+      params.push(locationLabel?.trim() || null);
+    }
+
+    if (coverPhotoId !== undefined) {
+      if (coverPhotoId !== null) {
+        // Validate that the photo belongs to this memory
+        const belongs = await dbGet(
+          "SELECT 1 FROM memory_photos WHERE memory_id = ? AND photo_id = ?",
+          [id, coverPhotoId]
+        );
+        if (!belongs) {
+          return res.status(400).json({ error: "Photo does not belong to this memory" });
+        }
+      }
+      updates.push('cover_photo_id = ?');
+      params.push(coverPhotoId);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: "No updates provided" });
+    }
+
+    updates.push("updated_at = datetime('now')");
+    params.push(id);
+
+    await dbRun(`UPDATE memories SET ${updates.join(', ')} WHERE id = ?`, params);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ PUT /api/memories/:id error:", err);
     res.status(500).json({ error: "Database error" });
   }
 });

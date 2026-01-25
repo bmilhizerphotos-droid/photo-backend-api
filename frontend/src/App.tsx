@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, fetchAlbums, fetchMemory, Photo, Person, Album } from './api';
+import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, fetchAlbums, fetchMemory, updateMemory, Photo, Person, Album } from './api';
 import MemoriesGrid from './components/MemoriesGrid';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
@@ -60,6 +60,13 @@ function AppContent() {
   const [memoryPhotosLoading, setMemoryPhotosLoading] = useState(false);
   const [memoryTitle, setMemoryTitle] = useState<string>('');
   const [memoryNarrative, setMemoryNarrative] = useState<string | null>(null);
+  const [memoryId, setMemoryId] = useState<number | null>(null);
+  const [memoryLocationLabel, setMemoryLocationLabel] = useState<string | null>(null);
+  const [memoryCoverPhotoId, setMemoryCoverPhotoId] = useState<number | null>(null);
+  const [editingMemoryField, setEditingMemoryField] = useState<'title' | 'narrative' | 'location' | null>(null);
+  const [editingMemoryValue, setEditingMemoryValue] = useState<string>('');
+  const [memoryUpdateLoading, setMemoryUpdateLoading] = useState(false);
+  const [coverPhotoSelectMode, setCoverPhotoSelectMode] = useState(false);
 
   // Use the infinite scroll hook
   const {
@@ -272,13 +279,16 @@ function AppContent() {
   }, [showToast]);
 
   // Handle memory selection - load memory photos
-  const handleSelectMemory = useCallback(async (memoryId: number) => {
+  const handleSelectMemory = useCallback(async (id: number) => {
     setCurrentView('memory-detail');
     setMemoryPhotosLoading(true);
     try {
-      const memory = await fetchMemory(memoryId);
+      const memory = await fetchMemory(id);
+      setMemoryId(id);
       setMemoryTitle(memory.title || 'Untitled Memory');
       setMemoryNarrative(memory.narrative);
+      setMemoryLocationLabel(memory.locationLabel);
+      setMemoryCoverPhotoId(memory.coverPhotoId);
       setMemoryPhotos(memory.photos);
     } catch (err) {
       console.error("Failed to load memory:", err);
@@ -293,8 +303,59 @@ function AppContent() {
     setMemoryPhotos([]);
     setMemoryTitle('');
     setMemoryNarrative(null);
+    setMemoryId(null);
+    setMemoryLocationLabel(null);
+    setMemoryCoverPhotoId(null);
+    setEditingMemoryField(null);
+    setEditingMemoryValue('');
+    setCoverPhotoSelectMode(false);
     setCurrentView('memories');
   }, []);
+
+  // Save an edited memory field
+  const handleMemorySave = useCallback(async (field: 'title' | 'narrative' | 'location', value: string) => {
+    if (!memoryId) return;
+    setMemoryUpdateLoading(true);
+    try {
+      const updates: Record<string, string | null> = {};
+      if (field === 'title') updates.title = value;
+      else if (field === 'narrative') updates.narrative = value || null;
+      else if (field === 'location') updates.locationLabel = value || null;
+
+      await updateMemory(memoryId, updates);
+
+      // Update local state
+      if (field === 'title') setMemoryTitle(value || 'Untitled Memory');
+      else if (field === 'narrative') setMemoryNarrative(value || null);
+      else if (field === 'location') setMemoryLocationLabel(value || null);
+
+      setEditingMemoryField(null);
+      setEditingMemoryValue('');
+      showToast('success', `Memory ${field} updated`);
+    } catch (err) {
+      console.error("Failed to update memory:", err);
+      showToast('error', `Failed to update ${field}`);
+    } finally {
+      setMemoryUpdateLoading(false);
+    }
+  }, [memoryId, showToast]);
+
+  // Set cover photo for a memory
+  const handleSetCoverPhoto = useCallback(async (photoId: number) => {
+    if (!memoryId) return;
+    setMemoryUpdateLoading(true);
+    try {
+      await updateMemory(memoryId, { coverPhotoId: photoId });
+      setMemoryCoverPhotoId(photoId);
+      setCoverPhotoSelectMode(false);
+      showToast('success', 'Cover photo updated');
+    } catch (err) {
+      console.error("Failed to set cover photo:", err);
+      showToast('error', 'Failed to update cover photo');
+    } finally {
+      setMemoryUpdateLoading(false);
+    }
+  }, [memoryId, showToast]);
 
   // Handle photos added to album
   const handleAddedToAlbum = useCallback((albumId: number, albumName: string) => {
@@ -508,7 +569,7 @@ function AppContent() {
       case 'memory-detail':
         return (
           <div className="px-4 sm:px-6 lg:px-8">
-            <div className="mb-6 flex items-center space-x-4">
+            <div className="mb-6 flex items-center justify-between">
               <button
                 onClick={handleBackToMemories}
                 className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"
@@ -518,13 +579,133 @@ function AppContent() {
                 </svg>
                 <span>Back to Memories</span>
               </button>
+              {!coverPhotoSelectMode ? (
+                <button
+                  onClick={() => setCoverPhotoSelectMode(true)}
+                  className="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-md hover:bg-gray-100 border border-gray-300"
+                >
+                  Change Cover
+                </button>
+              ) : (
+                <button
+                  onClick={() => setCoverPhotoSelectMode(false)}
+                  className="text-sm text-red-600 hover:text-red-800 px-3 py-1.5 rounded-md hover:bg-red-50 border border-red-300"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-1">
-              {memoryTitle}
-            </h2>
-            {memoryNarrative && (
-              <p className="text-gray-600 mb-4 max-w-2xl">{memoryNarrative}</p>
+
+            {coverPhotoSelectMode && (
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                Click any photo below to set it as the cover photo.
+              </div>
             )}
+
+            {/* Editable Title */}
+            {editingMemoryField === 'title' ? (
+              <input
+                autoFocus
+                className="text-2xl font-bold text-gray-900 mb-1 w-full bg-white border border-blue-400 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-300"
+                value={editingMemoryValue}
+                disabled={memoryUpdateLoading}
+                onChange={(e) => setEditingMemoryValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleMemorySave('title', editingMemoryValue);
+                  } else if (e.key === 'Escape') {
+                    setEditingMemoryField(null);
+                    setEditingMemoryValue('');
+                  }
+                }}
+                onBlur={() => void handleMemorySave('title', editingMemoryValue)}
+              />
+            ) : (
+              <h2
+                className="text-2xl font-bold text-gray-900 mb-1 cursor-pointer group flex items-center gap-2 hover:text-blue-800"
+                onClick={() => {
+                  setEditingMemoryField('title');
+                  setEditingMemoryValue(memoryTitle);
+                }}
+              >
+                {memoryTitle}
+                <svg className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </h2>
+            )}
+
+            {/* Editable Location */}
+            {editingMemoryField === 'location' ? (
+              <input
+                autoFocus
+                className="text-sm text-gray-500 mb-2 w-full max-w-md bg-white border border-blue-400 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-300"
+                value={editingMemoryValue}
+                placeholder="Add location"
+                disabled={memoryUpdateLoading}
+                onChange={(e) => setEditingMemoryValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleMemorySave('location', editingMemoryValue);
+                  } else if (e.key === 'Escape') {
+                    setEditingMemoryField(null);
+                    setEditingMemoryValue('');
+                  }
+                }}
+                onBlur={() => void handleMemorySave('location', editingMemoryValue)}
+              />
+            ) : (
+              <p
+                className="text-sm text-gray-500 mb-2 cursor-pointer group flex items-center gap-1 hover:text-blue-600"
+                onClick={() => {
+                  setEditingMemoryField('location');
+                  setEditingMemoryValue(memoryLocationLabel || '');
+                }}
+              >
+                {memoryLocationLabel || <span className="italic text-gray-400">Add location</span>}
+                <svg className="w-3 h-3 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </p>
+            )}
+
+            {/* Editable Narrative */}
+            {editingMemoryField === 'narrative' ? (
+              <textarea
+                autoFocus
+                className="text-gray-600 mb-4 max-w-2xl w-full bg-white border border-blue-400 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-blue-300 min-h-[80px]"
+                value={editingMemoryValue}
+                placeholder="Click to add a narrative..."
+                disabled={memoryUpdateLoading}
+                onChange={(e) => setEditingMemoryValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void handleMemorySave('narrative', editingMemoryValue);
+                  } else if (e.key === 'Escape') {
+                    setEditingMemoryField(null);
+                    setEditingMemoryValue('');
+                  }
+                }}
+                onBlur={() => void handleMemorySave('narrative', editingMemoryValue)}
+              />
+            ) : (
+              <p
+                className="text-gray-600 mb-4 max-w-2xl cursor-pointer group flex items-start gap-2 hover:text-blue-700"
+                onClick={() => {
+                  setEditingMemoryField('narrative');
+                  setEditingMemoryValue(memoryNarrative || '');
+                }}
+              >
+                <span>{memoryNarrative || <span className="italic text-gray-400">Click to add a narrative...</span>}</span>
+                <svg className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </p>
+            )}
+
             <p className="text-gray-500 text-sm mb-4">
               {memoryPhotos.length} {memoryPhotos.length === 1 ? 'photo' : 'photos'}
             </p>
@@ -542,9 +723,12 @@ function AppContent() {
             ) : (
               <PhotoMasonry
                 photos={memoryPhotos}
-                onPhotoClick={handlePhotoClick}
-                selectedIds={selectedIds}
-                selectMode={selectMode}
+                onPhotoClick={coverPhotoSelectMode
+                  ? (photo: Photo) => void handleSetCoverPhoto(photo.id)
+                  : handlePhotoClick
+                }
+                selectedIds={coverPhotoSelectMode && memoryCoverPhotoId ? new Set([memoryCoverPhotoId]) : selectedIds}
+                selectMode={coverPhotoSelectMode || selectMode}
               />
             )}
           </div>

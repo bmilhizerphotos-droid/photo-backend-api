@@ -848,6 +848,7 @@ export interface Memory {
   id: number;
   title: string;
   narrative: string | null;
+  coverPhotoId: number | null;
   coverPhotoUrl: string | null;
   photoCount: number;
   eventDateStart: string;
@@ -974,6 +975,33 @@ export async function deleteMemory(id: number): Promise<{ success: boolean }> {
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(error.error || `Failed to delete memory: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Update a memory (title, narrative, locationLabel, coverPhotoId)
+ */
+export async function updateMemory(
+  id: number,
+  updates: { title?: string; narrative?: string | null; locationLabel?: string | null; coverPhotoId?: number | null }
+): Promise<{ success: boolean }> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl(`/api/memories/${id}`), {
+    method: "PUT",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(updates),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to update memory: ${res.status}`);
   }
 
   return res.json();
