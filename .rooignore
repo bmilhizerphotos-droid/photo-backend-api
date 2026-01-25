@@ -1,0 +1,13 @@
+# Ignore the large photo database and media
+photo-db.sqlite
+photo-db.sqlite-journal
+*.jpg
+*.png
+*.thumbnails/
+G:/Photos/
+
+# Ignore standard heavy folders
+node_modules/
+.git/
+build/
+dist/
