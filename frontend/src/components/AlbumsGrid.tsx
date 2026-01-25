@@ -104,9 +104,9 @@ export default function AlbumsGrid({ onSelectAlbum, onCreateAlbum, refreshTrigge
             >
               {/* Album cover */}
               <div className="aspect-square bg-gray-100 flex items-center justify-center">
-                {album.coverPhotoId ? (
+                {album.coverPhotoUrl ? (
                   <img
-                    src={`/thumbnails/${album.coverPhotoId}`}
+                    src={album.coverPhotoUrl}
                     alt={album.name}
                     className="w-full h-full object-cover"
                   />

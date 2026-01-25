@@ -156,9 +156,9 @@ export default function AddToAlbumModal({ isOpen, onClose, photoIds, onAdded }: 
                     >
                       {/* Album thumbnail */}
                       <div className="w-12 h-12 bg-gray-100 rounded flex-shrink-0 flex items-center justify-center overflow-hidden">
-                        {album.coverPhotoId ? (
+                        {album.coverPhotoUrl ? (
                           <img
-                            src={`/thumbnails/${album.coverPhotoId}`}
+                            src={album.coverPhotoUrl}
                             alt=""
                             className="w-full h-full object-cover"
                           />

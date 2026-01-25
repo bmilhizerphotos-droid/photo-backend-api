@@ -37,13 +37,34 @@ function buildUrl(path: string): string {
 async function getAuthToken(): Promise<string | null> {
   const user = auth.currentUser;
   if (!user) return null;
-  
+
   try {
     return await user.getIdToken();
   } catch (error) {
     console.error("Failed to get auth token:", error);
     return null;
   }
+}
+
+/**
+ * Build an authenticated thumbnail URL for use in img src
+ * Returns null if not authenticated
+ */
+export async function buildThumbnailUrl(photoId: number): Promise<string | null> {
+  const token = await getAuthToken();
+  if (!token) return null;
+
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+  const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+  let thumbnailUrl = `/thumbnails/${photoId}`;
+  if (isDev) {
+    return `${thumbnailUrl}?${authParams}`;
+  } else if (baseFromEnv) {
+    return `${baseFromEnv}${thumbnailUrl}?${authParams}`;
+  }
+  return `${thumbnailUrl}?${authParams}`;
 }
 
 export interface Photo {
@@ -575,6 +596,7 @@ export interface Album {
   name: string;
   description: string | null;
   coverPhotoId: number | null;
+  coverPhotoUrl: string | null;
   photoCount: number;
   createdAt: string;
   updatedAt: string;
@@ -602,7 +624,29 @@ export async function fetchAlbums(): Promise<Album[]> {
     throw new Error(`Failed to fetch albums: ${res.status} ${res.statusText}`);
   }
 
-  return res.json();
+  const albums = await res.json();
+
+  // Add authenticated cover photo URLs
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+  const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+  return albums.map((album: Album) => {
+    if (!album.coverPhotoId) {
+      return { ...album, coverPhotoUrl: null };
+    }
+
+    let coverPhotoUrl = `/thumbnails/${album.coverPhotoId}`;
+    if (isDev) {
+      coverPhotoUrl = `${coverPhotoUrl}?${authParams}`;
+    } else if (baseFromEnv) {
+      coverPhotoUrl = `${baseFromEnv}${coverPhotoUrl}?${authParams}`;
+    } else {
+      coverPhotoUrl = `${coverPhotoUrl}?${authParams}`;
+    }
+
+    return { ...album, coverPhotoUrl };
+  });
 }
 
 /**
