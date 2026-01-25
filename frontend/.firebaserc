@@ -1,7 +1,14 @@
 {
   "projects": {
-    "photo-app-f8102": "photo-app-f8102"
+    "default": "photo-app-f8102"
   },
-  "targets": {},
-  "etags": {}
+  "targets": {
+    "photo-app-f8102": {
+      "hosting": {
+        "photo-app-f8102": [
+          "photo-app-f8102"
+        ]
+      }
+    }
+  }
 }
