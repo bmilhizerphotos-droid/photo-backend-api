@@ -5,7 +5,7 @@ import fsPromises from "fs/promises";
 import path from "path";
 import cors from "cors";
 import sharp from "sharp";
-import { dbGet, dbAll, dbRun } from "./db.js";
+import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback } from "./db.js";
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
 import { fileURLToPath } from "url";
@@ -474,16 +474,18 @@ app.get("/photos/:id", authenticateToken, photoIdParam, validate, async (req, re
 
 // ---------------- BULK (PROTECTED) ----------------
 app.post("/api/photos/bulk", authenticateToken, async (req, res) => {
+  const { action, photoIds, albumName } = req.body;
+
+  if (!Array.isArray(photoIds) || photoIds.length === 0) {
+    return res.status(400).json({ error: "photoIds must be a non-empty array" });
+  }
+
+  let updated = 0;
+  let skipped = 0;
+  const errors = [];
+
   try {
-    const { action, photoIds, albumName } = req.body;
-
-    if (!Array.isArray(photoIds) || photoIds.length === 0) {
-      return res.status(400).json({ error: "photoIds must be a non-empty array" });
-    }
-
-    let updated = 0;
-    let skipped = 0;
-    const errors = [];
+    await dbBegin(); // Start transaction
 
     switch (action) {
       case "favorite":
@@ -510,6 +512,7 @@ app.post("/api/photos/bulk", authenticateToken, async (req, res) => {
 
       case "add_to_album": {
         if (!albumName || typeof albumName !== "string") {
+          await dbRollback();
           return res.status(400).json({ error: "albumName is required" });
         }
 
@@ -548,11 +551,14 @@ app.post("/api/photos/bulk", authenticateToken, async (req, res) => {
         break;
 
       default:
+        await dbRollback();
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }
 
+    await dbCommit(); // Commit transaction
     res.json({ action, updated, skipped, errors, total: photoIds.length });
   } catch (err) {
+    await dbRollback(); // Rollback on error
     console.error("❌ Bulk operation error:", err);
     res.status(500).json({ error: "Bulk operation failed" });
   }
@@ -773,19 +779,23 @@ app.get("/api/photos/:id/faces", authenticateToken, photoIdParam, validate, asyn
 
 // Assign a face to a person
 app.post("/api/faces/:faceId/identify", authenticateToken, faceIdParam, personIdBody, validate, async (req, res) => {
+  const faceId = req.params.faceId;
+  const { personId } = req.body;
+
   try {
-    const faceId = req.params.faceId;
-    const { personId } = req.body;
+    await dbBegin(); // Start transaction
 
     // Verify the face exists
     const face = await dbGet("SELECT * FROM face_embeddings WHERE id = ?", [faceId]);
     if (!face) {
+      await dbRollback();
       return res.status(404).json({ error: "Face not found" });
     }
 
     // Verify the person exists
     const person = await dbGet("SELECT * FROM people WHERE id = ?", [personId]);
     if (!person) {
+      await dbRollback();
       return res.status(404).json({ error: "Person not found" });
     }
 
@@ -828,8 +838,10 @@ app.post("/api/faces/:faceId/identify", authenticateToken, faceIdParam, personId
       [personId, face.embedding, faceId]
     );
 
+    await dbCommit(); // Commit transaction
     res.json({ success: true, faceId, personId });
   } catch (err) {
+    await dbRollback(); // Rollback on error
     console.error("❌ /api/faces/:faceId/identify error:", err);
     res.status(500).json({ error: "Database error" });
   }
@@ -837,13 +849,16 @@ app.post("/api/faces/:faceId/identify", authenticateToken, faceIdParam, personId
 
 // Create a new person from a face
 app.post("/api/faces/:faceId/create-person", authenticateToken, faceIdParam, personNameBody, validate, async (req, res) => {
+  const faceId = req.params.faceId;
+  const { name } = req.body;
+
   try {
-    const faceId = req.params.faceId;
-    const { name } = req.body;
+    await dbBegin(); // Start transaction
 
     // Verify the face exists
     const face = await dbGet("SELECT * FROM face_embeddings WHERE id = ?", [faceId]);
     if (!face) {
+      await dbRollback();
       return res.status(404).json({ error: "Face not found" });
     }
 
@@ -873,6 +888,8 @@ app.post("/api/faces/:faceId/create-person", authenticateToken, faceIdParam, per
       [personId, face.embedding, faceId]
     );
 
+    await dbCommit(); // Commit transaction
+
     res.json({
       success: true,
       person: {
@@ -883,6 +900,7 @@ app.post("/api/faces/:faceId/create-person", authenticateToken, faceIdParam, per
       },
     });
   } catch (err) {
+    await dbRollback(); // Rollback on error
     if (err.message?.includes("UNIQUE constraint failed")) {
       return res.status(409).json({ error: "A person with this name already exists" });
     }

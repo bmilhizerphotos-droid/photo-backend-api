@@ -7,6 +7,7 @@ const __dirname = path.dirname(__filename);
 
 // Create database connection
 const db = new sqlite3.Database(path.join(__dirname, "photo-db.sqlite"));
+db.configure("busy_timeout", 5000); // Configure busy timeout to 5 seconds
 
 // Promisify database operations
 const dbRun = (sql, params = []) => {
@@ -34,6 +35,18 @@ const dbAll = (sql, params = []) => {
       else resolve(rows);
     });
   });
+};
+
+const dbBegin = () => {
+  return dbRun("BEGIN TRANSACTION");
+};
+
+const dbCommit = () => {
+  return dbRun("COMMIT TRANSACTION");
+};
+
+const dbRollback = () => {
+  return dbRun("ROLLBACK TRANSACTION");
 };
 
 // Initialize database schema
@@ -259,5 +272,5 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-export { dbRun, dbGet, dbAll, closeDb };
-export default { run: dbRun, get: dbGet, all: dbAll, close: closeDb };
+export { dbRun, dbGet, dbAll, dbBegin, dbCommit, dbRollback, closeDb };
+export default { run: dbRun, get: dbGet, all: dbAll, begin: dbBegin, commit: dbCommit, rollback: dbRollback, close: closeDb };
