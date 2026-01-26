@@ -5,7 +5,7 @@ import fsPromises from "fs/promises";
 import path from "path";
 import cors from "cors";
 import sharp from "sharp";
-import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback } from "./db.js";
+import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback, rebuildMemoriesFts, upsertMemoryFts, deleteMemoryFts } from "./db.js";
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
 import { generateMemories, generateNarratives, regenerateAllMemories } from "./memory-generator.js";
@@ -1934,6 +1934,56 @@ app.get("/api/memories", authenticateToken, async (req, res) => {
   }
 });
 
+// Search memories via FTS5
+app.get("/api/memories/search", authenticateToken, async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim();
+    if (!q) {
+      return res.redirect("/api/memories");
+    }
+
+    // Convert "word1 word2" to "word1* AND word2*" for prefix + AND matching
+    const terms = q.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '')}"*`).join(" AND ");
+
+    const memories = await dbAll(`
+      SELECT
+        m.id,
+        m.title,
+        m.narrative,
+        m.cover_photo_id,
+        m.event_date_start,
+        m.event_date_end,
+        m.location_label,
+        m.photo_count
+      FROM memories m
+      JOIN memories_fts fts ON fts.rowid = m.id
+      WHERE memories_fts MATCH ?
+      ORDER BY fts.rank
+    `, [terms]);
+
+    const token = req.headers.authorization?.substring(7) || req.query.token;
+    const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+    res.json(
+      memories.map((m) => ({
+        id: m.id,
+        title: m.title,
+        narrative: m.narrative,
+        coverPhotoUrl: m.cover_photo_id
+          ? `/thumbnails/${m.cover_photo_id}?${authParams}`
+          : null,
+        photoCount: m.photo_count,
+        eventDateStart: m.event_date_start,
+        eventDateEnd: m.event_date_end,
+        locationLabel: m.location_label,
+      }))
+    );
+  } catch (err) {
+    console.error("❌ GET /api/memories/search error:", err);
+    res.status(500).json({ error: "Search failed" });
+  }
+});
+
 // Get a single memory with its photos
 app.get("/api/memories/:id", authenticateToken, async (req, res) => {
   try {
@@ -2064,6 +2114,9 @@ app.put("/api/memories/:id", authenticateToken, async (req, res) => {
 
     await dbRun(`UPDATE memories SET ${updates.join(', ')} WHERE id = ?`, params);
 
+    // Sync FTS index
+    await upsertMemoryFts(id);
+
     res.json({ success: true });
   } catch (err) {
     console.error("❌ PUT /api/memories/:id error:", err);
@@ -2157,6 +2210,9 @@ app.post("/api/memories/generate", authenticateToken, async (req, res) => {
     const narrativeCount = await generateNarratives();
     console.log(`✅ Narratives: ${narrativeCount} generated`);
 
+    // Rebuild FTS index after generation
+    await rebuildMemoriesFts();
+
     res.json({
       created: clusterResult.created,
       skipped: clusterResult.skipped,
@@ -2185,6 +2241,8 @@ app.post("/api/memories/regenerate", authenticateToken, async (req, res) => {
   try {
     console.log("🔄 Starting full memory regeneration...");
     const result = await regenerateAllMemories();
+    // Rebuild FTS index after full regeneration
+    await rebuildMemoriesFts();
     console.log(`✅ Regeneration complete: ${result.created} created, ${result.enriched} enriched.`);
     res.json(result);
   } catch (err) {
@@ -2207,6 +2265,9 @@ app.delete("/api/memories/:id", authenticateToken, async (req, res) => {
     if (result.changes === 0) {
       return res.status(404).json({ error: "Memory not found" });
     }
+
+    // Remove from FTS index
+    await deleteMemoryFts(id);
 
     res.json({ success: true });
   } catch (err) {

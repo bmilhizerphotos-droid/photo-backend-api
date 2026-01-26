@@ -937,6 +937,38 @@ export async function fetchMemory(id: number): Promise<MemoryWithPhotos> {
 }
 
 /**
+ * Search memories via FTS5
+ */
+export async function searchMemories(query: string): Promise<Memory[]> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl(`/api/memories/search?q=${encodeURIComponent(query)}`), {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Search failed: ${res.status} ${res.statusText}`);
+  }
+
+  const memories: Memory[] = await res.json();
+
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+
+  return memories.map(memory => {
+    let coverPhotoUrl = memory.coverPhotoUrl;
+    if (coverPhotoUrl && !isDev && baseFromEnv) {
+      coverPhotoUrl = `${baseFromEnv}${coverPhotoUrl}`;
+    }
+    return { ...memory, coverPhotoUrl };
+  });
+}
+
+/**
  * Full memory regeneration: delete all, re-cluster, enrich with AI
  */
 export async function regenerateMemoriesApi(): Promise<{ created: number; enriched: number }> {

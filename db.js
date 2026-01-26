@@ -281,6 +281,90 @@ await dbRun(`CREATE INDEX IF NOT EXISTS idx_memories_dates ON memories(event_dat
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_memory_photos_memory ON memory_photos(memory_id)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_memory_photos_photo ON memory_photos(photo_id)`);
 
+// FTS5 virtual table for memory search
+await dbRun(`
+  CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    title,
+    narrative,
+    location_label,
+    tags,
+    content='',
+    content_rowid='rowid'
+  )
+`);
+
+/**
+ * Rebuild the FTS index from scratch.
+ * Called after regeneration or on startup if needed.
+ */
+async function rebuildMemoriesFts() {
+  await dbRun(`DELETE FROM memories_fts`);
+  await dbRun(`
+    INSERT INTO memories_fts(rowid, title, narrative, location_label, tags)
+    SELECT
+      m.id,
+      COALESCE(m.title, ''),
+      COALESCE(m.narrative, ''),
+      COALESCE(m.location_label, ''),
+      COALESCE(
+        (SELECT GROUP_CONCAT(DISTINCT t.name, ' ')
+         FROM tags t
+         JOIN photo_tags pt ON t.id = pt.tag_id
+         JOIN memory_photos mp ON pt.photo_id = mp.photo_id
+         WHERE mp.memory_id = m.id),
+        ''
+      )
+    FROM memories m
+  `);
+}
+
+/**
+ * Upsert a single memory into the FTS index.
+ */
+async function upsertMemoryFts(memoryId) {
+  // Delete old entry (ignore if not exists)
+  try {
+    await dbRun(`INSERT INTO memories_fts(memories_fts, rowid, title, narrative, location_label, tags) VALUES('delete', ?, '', '', '', '')`, [memoryId]);
+  } catch { /* not in index yet */ }
+
+  const row = await dbGet(`
+    SELECT
+      m.id,
+      COALESCE(m.title, '') as title,
+      COALESCE(m.narrative, '') as narrative,
+      COALESCE(m.location_label, '') as location_label,
+      COALESCE(
+        (SELECT GROUP_CONCAT(DISTINCT t.name, ' ')
+         FROM tags t
+         JOIN photo_tags pt ON t.id = pt.tag_id
+         JOIN memory_photos mp ON pt.photo_id = mp.photo_id
+         WHERE mp.memory_id = m.id),
+        ''
+      ) as tags
+    FROM memories m
+    WHERE m.id = ?
+  `, [memoryId]);
+
+  if (row) {
+    await dbRun(
+      `INSERT INTO memories_fts(rowid, title, narrative, location_label, tags) VALUES(?, ?, ?, ?, ?)`,
+      [row.id, row.title, row.narrative, row.location_label, row.tags]
+    );
+  }
+}
+
+/**
+ * Remove a memory from the FTS index.
+ */
+async function deleteMemoryFts(memoryId) {
+  try {
+    await dbRun(`INSERT INTO memories_fts(memories_fts, rowid, title, narrative, location_label, tags) VALUES('delete', ?, '', '', '', '')`, [memoryId]);
+  } catch { /* ignore */ }
+}
+
+// Rebuild FTS on startup to ensure consistency
+await rebuildMemoriesFts();
+
 console.log("✅ SQLite DB opened:", path.join(__dirname, "photo-db.sqlite"));
 
 // Graceful shutdown handler
@@ -304,5 +388,5 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-export { dbRun, dbGet, dbAll, dbBegin, dbCommit, dbRollback, closeDb };
-export default { run: dbRun, get: dbGet, all: dbAll, begin: dbBegin, commit: dbCommit, rollback: dbRollback, close: closeDb };
+export { dbRun, dbGet, dbAll, dbBegin, dbCommit, dbRollback, closeDb, rebuildMemoriesFts, upsertMemoryFts, deleteMemoryFts };
+export default { run: dbRun, get: dbGet, all: dbAll, begin: dbBegin, commit: dbCommit, rollback: dbRollback, close: closeDb, rebuildMemoriesFts, upsertMemoryFts, deleteMemoryFts };

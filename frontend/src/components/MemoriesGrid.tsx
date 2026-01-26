@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { fetchMemories, regenerateMemoriesApi, deleteMemory, Memory } from '../api';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchMemories, searchMemories, regenerateMemoriesApi, deleteMemory, Memory } from '../api';
 import MemoryEditModal from './MemoryEditModal';
 
 interface MemoriesGridProps {
@@ -26,10 +26,43 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     loadMemories();
   }, []);
+
+  // Debounced search
+  const doSearch = useCallback(async (query: string) => {
+    try {
+      setSearching(true);
+      if (query.trim()) {
+        const results = await searchMemories(query.trim());
+        setMemories(results);
+      } else {
+        const all = await fetchMemories();
+        setMemories(all);
+      }
+    } catch (err) {
+      console.error("Search failed:", err);
+    } finally {
+      setSearching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    // Skip debounce on initial empty query (handled by loadMemories)
+    if (searchQuery === '' && memories.length > 0 && !loading) {
+      doSearch('');
+      return;
+    }
+    if (searchQuery === '') return;
+    debounceRef.current = setTimeout(() => doSearch(searchQuery), 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [searchQuery, doSearch]);
 
   async function loadMemories() {
     try {
@@ -54,6 +87,7 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
     try {
       setGenerating(true);
       setError(null);
+      setSearchQuery('');
       const result = await regenerateMemoriesApi();
       console.log("Memory regeneration result:", result);
       const refreshed = await fetchMemories();
@@ -122,7 +156,7 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold text-gray-800">Memories</h2>
         <button
           onClick={handleRegenerate}
@@ -136,13 +170,54 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
         </button>
       </div>
 
+      {/* Search input */}
+      <div className="relative mb-6">
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search memories by title, narrative, location, or tags..."
+          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
+        />
+        {searching && (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500" />
+          </div>
+        )}
+        {searchQuery && !searching && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+
       {memories.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
-          <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
-          <p className="text-lg">No memories yet</p>
-          <p className="text-sm mt-1">Click "Regenerate Memories" to create memories from your photos using AI</p>
+          {searchQuery ? (
+            <>
+              <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <p className="text-lg">No memories match "{searchQuery}"</p>
+              <p className="text-sm mt-1">Try a different search term</p>
+            </>
+          ) : (
+            <>
+              <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <p className="text-lg">No memories yet</p>
+              <p className="text-sm mt-1">Click "Regenerate Memories" to create memories from your photos using AI</p>
+            </>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
