@@ -307,11 +307,12 @@ async function rebuildMemoriesFts() {
       COALESCE(m.narrative, ''),
       COALESCE(m.location_label, ''),
       COALESCE(
-        (SELECT GROUP_CONCAT(DISTINCT t.name, ' ')
-         FROM tags t
-         JOIN photo_tags pt ON t.id = pt.tag_id
-         JOIN memory_photos mp ON pt.photo_id = mp.photo_id
-         WHERE mp.memory_id = m.id),
+        (SELECT GROUP_CONCAT(tn.name, ' ')
+         FROM (SELECT DISTINCT t.name
+               FROM tags t
+               JOIN photo_tags pt ON t.id = pt.tag_id
+               JOIN memory_photos mp ON pt.photo_id = mp.photo_id
+               WHERE mp.memory_id = m.id) tn),
         ''
       )
     FROM memories m
@@ -334,11 +335,12 @@ async function upsertMemoryFts(memoryId) {
       COALESCE(m.narrative, '') as narrative,
       COALESCE(m.location_label, '') as location_label,
       COALESCE(
-        (SELECT GROUP_CONCAT(DISTINCT t.name, ' ')
-         FROM tags t
-         JOIN photo_tags pt ON t.id = pt.tag_id
-         JOIN memory_photos mp ON pt.photo_id = mp.photo_id
-         WHERE mp.memory_id = m.id),
+        (SELECT GROUP_CONCAT(tn.name, ' ')
+         FROM (SELECT DISTINCT t.name
+               FROM tags t
+               JOIN photo_tags pt ON t.id = pt.tag_id
+               JOIN memory_photos mp ON pt.photo_id = mp.photo_id
+               WHERE mp.memory_id = m.id) tn),
         ''
       ) as tags
     FROM memories m
