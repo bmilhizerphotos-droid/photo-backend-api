@@ -8,7 +8,7 @@ import sharp from "sharp";
 import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback } from "./db.js";
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
-import { generateMemories, generateNarratives } from "./memory-generator.js";
+import { generateMemories, generateNarratives, regenerateAllMemories } from "./memory-generator.js";
 import { generateNarrative } from "./gemini-narrative.js";
 import { fileURLToPath } from "url";
 import { ApiError, errorHandler } from "./utils/errors.js";
@@ -2165,6 +2165,31 @@ app.post("/api/memories/generate", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("❌ POST /api/memories/generate error:", err);
     res.status(500).json({ error: "Memory generation failed" });
+  } finally {
+    memoriesGenerating = false;
+  }
+});
+
+// Full regeneration: delete all memories, re-cluster, and enrich with AI
+app.post("/api/memories/regenerate", authenticateToken, async (req, res) => {
+  if (memoriesGenerating) {
+    return res.status(409).json({ error: "Memory generation already in progress" });
+  }
+
+  const { confirm } = req.body || {};
+  if (!confirm) {
+    return res.status(400).json({ error: "Confirmation required. Send { confirm: true } to proceed." });
+  }
+
+  memoriesGenerating = true;
+  try {
+    console.log("🔄 Starting full memory regeneration...");
+    const result = await regenerateAllMemories();
+    console.log(`✅ Regeneration complete: ${result.created} created, ${result.enriched} enriched.`);
+    res.json(result);
+  } catch (err) {
+    console.error("❌ POST /api/memories/regenerate error:", err);
+    res.status(500).json({ error: "Memory regeneration failed: " + err.message });
   } finally {
     memoriesGenerating = false;
   }

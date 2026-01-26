@@ -937,6 +937,30 @@ export async function fetchMemory(id: number): Promise<MemoryWithPhotos> {
 }
 
 /**
+ * Full memory regeneration: delete all, re-cluster, enrich with AI
+ */
+export async function regenerateMemoriesApi(): Promise<{ created: number; enriched: number }> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/memories/regenerate"), {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ confirm: true }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to regenerate memories: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/**
  * Trigger memory generation (clustering + narrative generation)
  */
 export async function generateMemoriesApi(): Promise<{ created: number; skipped: number; narrativesGenerated: number }> {
