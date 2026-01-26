@@ -1220,3 +1220,119 @@ export async function removeTagFromPhoto(photoId: number, tagId: number): Promis
 
   return res.json();
 }
+
+// ============== DUPLICATES API ==============
+
+export interface DuplicatePhoto {
+  id: number;
+  filename: string;
+  dateTaken: string | null;
+  width: number | null;
+  height: number | null;
+  thumbnailUrl: string;
+  fullUrl: string;
+}
+
+export interface DuplicateGroup {
+  groupId: number;
+  count: number;
+  photos: DuplicatePhoto[];
+}
+
+export interface DuplicateStats {
+  totalPhotos: number;
+  hashedPhotos: number;
+  duplicateGroups: number;
+  duplicatePhotos: number;
+  burstGroups: number;
+  burstPhotos: number;
+  scanning: boolean;
+}
+
+export async function fetchDuplicateStats(): Promise<DuplicateStats> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/photos/duplicates/stats"), {
+    method: "GET",
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+
+  if (!res.ok) throw new Error(`Failed to fetch stats: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchDuplicates(): Promise<DuplicateGroup[]> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/photos/duplicates"), {
+    method: "GET",
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+
+  if (!res.ok) throw new Error(`Failed to fetch duplicates: ${res.status}`);
+
+  const groups: DuplicateGroup[] = await res.json();
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+
+  return groups.map(g => ({
+    ...g,
+    photos: g.photos.map(p => {
+      let thumbnailUrl = p.thumbnailUrl;
+      let fullUrl = p.fullUrl;
+      if (!isDev && baseFromEnv) {
+        if (thumbnailUrl) thumbnailUrl = `${baseFromEnv}${thumbnailUrl}`;
+        if (fullUrl) fullUrl = `${baseFromEnv}${fullUrl}`;
+      }
+      return { ...p, thumbnailUrl, fullUrl };
+    }),
+  }));
+}
+
+export async function fetchBursts(): Promise<DuplicateGroup[]> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/photos/bursts"), {
+    method: "GET",
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+
+  if (!res.ok) throw new Error(`Failed to fetch bursts: ${res.status}`);
+
+  const groups: DuplicateGroup[] = await res.json();
+  const baseFromEnv = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
+  const isDev = import.meta.env.DEV;
+
+  return groups.map(g => ({
+    ...g,
+    photos: g.photos.map(p => {
+      let thumbnailUrl = p.thumbnailUrl;
+      let fullUrl = p.fullUrl;
+      if (!isDev && baseFromEnv) {
+        if (thumbnailUrl) thumbnailUrl = `${baseFromEnv}${thumbnailUrl}`;
+        if (fullUrl) fullUrl = `${baseFromEnv}${fullUrl}`;
+      }
+      return { ...p, thumbnailUrl, fullUrl };
+    }),
+  }));
+}
+
+export async function startDuplicateScan(): Promise<{ started: boolean; message: string }> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl("/api/photos/scan-duplicates"), {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to start scan: ${res.status}`);
+  }
+
+  return res.json();
+}

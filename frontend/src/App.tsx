@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { fetchPhotos, fetchPeople, fetchPersonPhotos, fetchAlbum, fetchAlbums, fetchMemory, updateMemory, Photo, Person, Album } from './api';
 import MemoriesGrid from './components/MemoriesGrid';
+import DuplicatesView from './components/DuplicatesView';
 import { auth } from './firebase';
 import { useInfinitePhotos } from './hooks/useInfinitePhotos';
 import { useIntersectionSentinel } from './hooks/useIntersectionSentinel';
@@ -731,6 +732,13 @@ function AppContent() {
                 selectMode={coverPhotoSelectMode || selectMode}
               />
             )}
+          </div>
+        );
+
+      case 'duplicates':
+        return (
+          <div className="px-4 sm:px-6 lg:px-8">
+            <DuplicatesView />
           </div>
         );
 

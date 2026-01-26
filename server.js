@@ -9,6 +9,7 @@ import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback, rebuildMemoriesFts,
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
 import { generateMemories, generateNarratives, regenerateAllMemories } from "./memory-generator.js";
+import { scanAll, getDuplicateGroups, getBurstGroups, getScanStats } from "./duplicate-detector.js";
 import { generateNarrative } from "./gemini-narrative.js";
 import { fileURLToPath } from "url";
 import { ApiError, errorHandler } from "./utils/errors.js";
@@ -2279,6 +2280,95 @@ app.delete("/api/memories/:id", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("❌ DELETE /api/memories/:id error:", err);
     res.status(500).json({ error: "Database error" });
+  }
+});
+
+// ---------------- DUPLICATE DETECTION ----------------
+
+let duplicateScanRunning = false;
+
+app.get("/api/photos/duplicates/stats", authenticateToken, async (req, res) => {
+  try {
+    const stats = await getScanStats();
+    stats.scanning = duplicateScanRunning;
+    res.json(stats);
+  } catch (err) {
+    console.error("❌ GET /api/photos/duplicates/stats error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+app.get("/api/photos/duplicates", authenticateToken, async (req, res) => {
+  try {
+    const groups = await getDuplicateGroups();
+    const token = req.headers.authorization?.substring(7) || req.query.token;
+    const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+    res.json(
+      groups.map((g) => ({
+        groupId: g.groupId,
+        count: g.count,
+        photos: g.photos.map((p) => ({
+          id: p.id,
+          filename: p.filename,
+          dateTaken: p.date_taken,
+          width: p.width,
+          height: p.height,
+          thumbnailUrl: `/thumbnails/${p.id}?${authParams}`,
+          fullUrl: `/photos/${p.id}?${authParams}`,
+        })),
+      }))
+    );
+  } catch (err) {
+    console.error("❌ GET /api/photos/duplicates error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+app.get("/api/photos/bursts", authenticateToken, async (req, res) => {
+  try {
+    const groups = await getBurstGroups();
+    const token = req.headers.authorization?.substring(7) || req.query.token;
+    const authParams = `token=${encodeURIComponent(token)}&v=${Date.now()}`;
+
+    res.json(
+      groups.map((g) => ({
+        groupId: g.groupId,
+        count: g.count,
+        photos: g.photos.map((p) => ({
+          id: p.id,
+          filename: p.filename,
+          dateTaken: p.date_taken,
+          width: p.width,
+          height: p.height,
+          thumbnailUrl: `/thumbnails/${p.id}?${authParams}`,
+          fullUrl: `/photos/${p.id}?${authParams}`,
+        })),
+      }))
+    );
+  } catch (err) {
+    console.error("❌ GET /api/photos/bursts error:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
+app.post("/api/photos/scan-duplicates", authenticateToken, async (req, res) => {
+  if (duplicateScanRunning) {
+    return res.status(409).json({ error: "Scan already in progress" });
+  }
+
+  duplicateScanRunning = true;
+  res.json({ started: true, message: "Duplicate scan started in background" });
+
+  try {
+    const result = await scanAll((done, total, hashed, failed) => {
+      console.log(`  Hashing: ${done}/${total} (${hashed} ok, ${failed} failed)`);
+    });
+    console.log("✅ Duplicate scan complete:", result);
+  } catch (err) {
+    console.error("❌ Duplicate scan failed:", err);
+  } finally {
+    duplicateScanRunning = false;
   }
 });
 

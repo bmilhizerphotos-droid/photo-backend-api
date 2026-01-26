@@ -236,6 +236,20 @@ try {
   // Column already exists, ignore
 }
 
+// Add burst_id column to photos
+try {
+  await dbRun(`ALTER TABLE photos ADD COLUMN burst_id INTEGER`);
+} catch (e) {
+  // Column already exists, ignore
+}
+
+// Add duplicate_group_id column to photos
+try {
+  await dbRun(`ALTER TABLE photos ADD COLUMN duplicate_group_id INTEGER`);
+} catch (e) {
+  // Column already exists, ignore
+}
+
 // Memories table - stores AI-generated event memories
 await dbRun(`
   CREATE TABLE IF NOT EXISTS memories (

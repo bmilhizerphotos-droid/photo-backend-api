@@ -12,7 +12,8 @@ export type AppView =
   | "trash"
   | "albums"
   | "album-detail"
-  | "unidentified";
+  | "unidentified"
+  | "duplicates";
 
 interface SidebarProps {
   view: AppView;
@@ -96,6 +97,12 @@ const TrashIcon = () => (
   </svg>
 );
 
+const DuplicatesIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+  </svg>
+);
+
 const AlbumIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -121,6 +128,7 @@ export default function Sidebar({
     { id: "favorites", label: "Favorites", icon: <FavoritesIcon /> },
     { id: "people", label: "People", icon: <PeopleIcon /> },
     { id: "memories", label: "Memories", icon: <MemoriesIcon /> },
+    { id: "duplicates", label: "Duplicates", icon: <DuplicatesIcon /> },
     { id: "shared", label: "Shared", icon: <SharedIcon /> },
     { id: "import", label: "Import", icon: <ImportIcon /> },
     { id: "trash", label: "Trash", icon: <TrashIcon /> },
