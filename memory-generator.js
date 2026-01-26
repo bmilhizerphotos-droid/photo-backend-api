@@ -101,6 +101,59 @@ function clusterPhotos(photos) {
 }
 
 /**
+ * Compute a deterministic confidence score (0–100) for a memory cluster.
+ * Uses photo count, duration, GPS consistency, and tag density.
+ */
+async function computeConfidence(event) {
+  let score = 50;
+
+  // Photo count
+  const count = event.length;
+  if (count <= 2) score -= 25;
+  else if (count <= 7) score -= 10;
+  else if (count <= 80) score += 20;
+  else if (count > 200) score -= 20;
+
+  // Duration
+  const startMs = new Date(event[0].date_taken).getTime();
+  const endMs = new Date(event[event.length - 1].date_taken).getTime();
+  const durationMinutes = (endMs - startMs) / (1000 * 60);
+  if (durationMinutes < 30) score -= 10;
+  else if (durationMinutes <= 3 * 24 * 60) score += 20;
+  else score -= 15;
+
+  // Location consistency
+  const gpsPhotos = event.filter((p) => p.gps_lat != null && p.gps_lng != null);
+  if (gpsPhotos.length >= 2) {
+    const centLat = gpsPhotos.reduce((s, p) => s + p.gps_lat, 0) / gpsPhotos.length;
+    const centLng = gpsPhotos.reduce((s, p) => s + p.gps_lng, 0) / gpsPhotos.length;
+    let maxDist = 0;
+    for (const p of gpsPhotos) {
+      const d = haversine(centLat, centLng, p.gps_lat, p.gps_lng);
+      if (d > maxDist) maxDist = d;
+    }
+    if (maxDist <= 5) score += 20;
+    else if (maxDist <= 30) score += 10;
+    else score -= 15;
+  }
+
+  // Tag density
+  const photoIds = event.map((p) => p.id);
+  const placeholders = photoIds.map(() => "?").join(",");
+  const tagResult = await dbGet(
+    `SELECT COUNT(*) as cnt FROM photo_tags WHERE photo_id IN (${placeholders})`,
+    photoIds
+  );
+  const totalTags = tagResult?.cnt || 0;
+  if (count > 0 && totalTags > 0) {
+    if (totalTags / count >= 0.2) score += 20;
+    else score -= 10;
+  }
+
+  return Math.max(0, Math.min(100, score));
+}
+
+/**
  * Create a memory record and its photo associations in the database.
  * Returns the new memory ID or null on failure.
  */
@@ -117,14 +170,15 @@ async function createMemoryRecord(event) {
   }
 
   const coverPhotoId = event[0].id;
+  const confidence = await computeConfidence(event);
 
   try {
     await dbBegin();
 
     const result = await dbRun(
-      `INSERT INTO memories (cover_photo_id, event_date_start, event_date_end, center_lat, center_lng, photo_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-      [coverPhotoId, dateStart, dateEnd, centerLat, centerLng, event.length]
+      `INSERT INTO memories (cover_photo_id, event_date_start, event_date_end, center_lat, center_lng, photo_count, confidence, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+      [coverPhotoId, dateStart, dateEnd, centerLat, centerLng, event.length, confidence]
     );
 
     const memoryId = result.lastID;

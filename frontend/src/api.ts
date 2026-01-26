@@ -854,6 +854,7 @@ export interface Memory {
   eventDateStart: string;
   eventDateEnd: string;
   locationLabel: string | null;
+  confidence: number | null;
 }
 
 export interface MemoryWithPhotos extends Memory {

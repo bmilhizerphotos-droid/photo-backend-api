@@ -229,6 +229,13 @@ try {
   // Column already exists, ignore
 }
 
+// Add confidence column to memories
+try {
+  await dbRun(`ALTER TABLE memories ADD COLUMN confidence INTEGER`);
+} catch (e) {
+  // Column already exists, ignore
+}
+
 // Memories table - stores AI-generated event memories
 await dbRun(`
   CREATE TABLE IF NOT EXISTS memories (

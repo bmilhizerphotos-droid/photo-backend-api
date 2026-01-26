@@ -1906,7 +1906,8 @@ app.get("/api/memories", authenticateToken, async (req, res) => {
         m.event_date_start,
         m.event_date_end,
         m.location_label,
-        m.photo_count
+        m.photo_count,
+        m.confidence
       FROM memories m
       ORDER BY m.event_date_start DESC
     `);
@@ -1926,6 +1927,7 @@ app.get("/api/memories", authenticateToken, async (req, res) => {
         eventDateStart: m.event_date_start,
         eventDateEnd: m.event_date_end,
         locationLabel: m.location_label,
+        confidence: m.confidence,
       }))
     );
   } catch (err) {
@@ -1954,7 +1956,8 @@ app.get("/api/memories/search", authenticateToken, async (req, res) => {
         m.event_date_start,
         m.event_date_end,
         m.location_label,
-        m.photo_count
+        m.photo_count,
+        m.confidence
       FROM memories m
       JOIN memories_fts fts ON fts.rowid = m.id
       WHERE memories_fts MATCH ?
@@ -1976,6 +1979,7 @@ app.get("/api/memories/search", authenticateToken, async (req, res) => {
         eventDateStart: m.event_date_start,
         eventDateEnd: m.event_date_end,
         locationLabel: m.location_label,
+        confidence: m.confidence,
       }))
     );
   } catch (err) {
@@ -2001,7 +2005,8 @@ app.get("/api/memories/:id", authenticateToken, async (req, res) => {
         m.event_date_start,
         m.event_date_end,
         m.location_label,
-        m.photo_count
+        m.photo_count,
+        m.confidence
       FROM memories m
       WHERE m.id = ?
     `, [id]);
@@ -2038,6 +2043,7 @@ app.get("/api/memories/:id", authenticateToken, async (req, res) => {
       eventDateStart: memory.event_date_start,
       eventDateEnd: memory.event_date_end,
       locationLabel: memory.location_label,
+      confidence: memory.confidence,
       photos: photos.map((p) => ({
         id: p.id,
         filename: p.filename,
