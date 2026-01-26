@@ -305,7 +305,7 @@ await dbRun(`
  * Called after regeneration or on startup if needed.
  */
 async function rebuildMemoriesFts() {
-  await dbRun(`DELETE FROM memories_fts`);
+  await dbRun(`INSERT INTO memories_fts(memories_fts) VALUES('delete-all')`);
   await dbRun(`
     INSERT INTO memories_fts(rowid, title, narrative, location_label, tags)
     SELECT
