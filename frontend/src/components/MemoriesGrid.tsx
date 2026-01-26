@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { fetchMemories, generateMemoriesApi, deleteMemory, Memory } from '../api';
+import MemoryEditModal from './MemoryEditModal';
 
 interface MemoriesGridProps {
   onSelectMemory: (memoryId: number) => void;
@@ -25,6 +26,7 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
 
   useEffect(() => {
     loadMemories();
@@ -87,6 +89,16 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
     } finally {
       setDeletingId(null);
     }
+  }
+
+  function handleEdit(memory: Memory, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditingMemory(memory);
+  }
+
+  function handleEditSaved(updated: Memory) {
+    setMemories(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m));
+    setEditingMemory(null);
   }
 
   if (loading || generating) {
@@ -200,11 +212,21 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
                 )}
               </div>
 
+              {/* Edit button */}
+              <button
+                onClick={(e) => handleEdit(memory, e)}
+                className="absolute top-2 right-10 z-10 p-1.5 bg-blue-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-blue-600"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </button>
+
               {/* Delete button */}
               <button
                 onClick={(e) => handleDelete(memory.id, e)}
                 disabled={deletingId === memory.id}
-                className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 disabled:opacity-50"
+                className="absolute top-2 right-2 z-10 p-1.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 disabled:opacity-50"
               >
                 {deletingId === memory.id ? (
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -217,6 +239,15 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Edit modal */}
+      {editingMemory && (
+        <MemoryEditModal
+          memory={editingMemory}
+          onClose={() => setEditingMemory(null)}
+          onSaved={handleEditSaved}
+        />
       )}
     </div>
   );

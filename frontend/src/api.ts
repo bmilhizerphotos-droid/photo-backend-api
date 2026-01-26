@@ -1007,6 +1007,28 @@ export async function updateMemory(
   return res.json();
 }
 
+/**
+ * Generate AI title/narrative/location for a single memory (returns suggestions, does not save)
+ */
+export async function generateMemoryNarrative(id: number): Promise<{ title: string | null; narrative: string | null; locationLabel: string | null }> {
+  const token = await getAuthToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(buildUrl(`/api/memories/${id}/generate`), {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to generate narrative: ${res.status}`);
+  }
+
+  return res.json();
+}
+
 // ============== TAGS API ==============
 
 export interface Tag {

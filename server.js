@@ -9,6 +9,7 @@ import { dbGet, dbAll, dbRun, dbBegin, dbCommit, dbRollback } from "./db.js";
 import admin from "firebase-admin";
 import { generateTags, checkOllamaHealth } from "./ai-tag-generator.js";
 import { generateMemories, generateNarratives } from "./memory-generator.js";
+import { generateNarrative } from "./gemini-narrative.js";
 import { fileURLToPath } from "url";
 import { ApiError, errorHandler } from "./utils/errors.js";
 import { param, body } from "express-validator";
@@ -2067,6 +2068,74 @@ app.put("/api/memories/:id", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("❌ PUT /api/memories/:id error:", err);
     res.status(500).json({ error: "Database error" });
+  }
+});
+
+// Generate AI title/narrative/location for a single memory (returns suggestions, does NOT save)
+app.post("/api/memories/:id/generate", authenticateToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid memory ID" });
+    }
+
+    const memory = await dbGet(
+      `SELECT id, event_date_start, event_date_end, center_lat, center_lng, photo_count
+       FROM memories WHERE id = ?`,
+      [id]
+    );
+    if (!memory) {
+      return res.status(404).json({ error: "Memory not found" });
+    }
+
+    // Gather people in this memory's photos
+    const people = await dbAll(
+      `SELECT DISTINCT p.name
+       FROM people p
+       JOIN photo_people pp ON p.id = pp.person_id
+       JOIN memory_photos mp ON pp.photo_id = mp.photo_id
+       WHERE mp.memory_id = ?`,
+      [id]
+    );
+
+    // Gather top tags
+    const tags = await dbAll(
+      `SELECT t.name, COUNT(*) as cnt
+       FROM tags t
+       JOIN photo_tags pt ON t.id = pt.tag_id
+       JOIN memory_photos mp ON pt.photo_id = mp.photo_id
+       WHERE mp.memory_id = ?
+       GROUP BY t.name
+       ORDER BY cnt DESC
+       LIMIT 10`,
+      [id]
+    );
+
+    const startDate = new Date(memory.event_date_start);
+    const m = startDate.getMonth();
+    const season = m >= 2 && m <= 4 ? "spring" : m >= 5 && m <= 7 ? "summer" : m >= 8 && m <= 10 ? "fall" : "winter";
+
+    const metadata = {
+      eventDateStart: memory.event_date_start,
+      eventDateEnd: memory.event_date_end,
+      centerLat: memory.center_lat,
+      centerLng: memory.center_lng,
+      photoCount: memory.photo_count,
+      people: people.map((p) => p.name),
+      tags: tags.map((t) => t.name),
+      season,
+    };
+
+    const result = await generateNarrative(metadata);
+
+    res.json({
+      title: result.title || null,
+      narrative: result.narrative || null,
+      locationLabel: result.locationLabel || null,
+    });
+  } catch (err) {
+    console.error("❌ POST /api/memories/:id/generate error:", err);
+    res.status(500).json({ error: "Failed to generate narrative" });
   }
 });
 
