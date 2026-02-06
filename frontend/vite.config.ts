@@ -2,7 +2,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const BACKEND = "http://localhost:3001";
+// Force IPv4 to avoid localhost -> ::1 issues on Windows
+const BACKEND = "http://127.0.0.1:3001";
 
 export default defineConfig({
   appType: "spa",
