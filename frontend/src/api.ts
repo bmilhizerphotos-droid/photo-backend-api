@@ -11,8 +11,7 @@ export interface Photo {
 
 export async function fetchPhotos(offset = 0, limit = 50) {
   const res = await fetch(
-    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`,
-    { credentials: "include" }
+    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
   );
 
   if (!res.ok) {
