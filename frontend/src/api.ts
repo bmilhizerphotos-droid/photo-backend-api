@@ -1,5 +1,7 @@
 // frontend/src/api.ts
 
+const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? "";
+
 export interface Photo {
   id: number;
   filename: string;
@@ -9,7 +11,7 @@ export interface Photo {
 
 export async function fetchPhotos(offset = 0, limit = 50) {
   const res = await fetch(
-    `/api/photos?offset=${offset}&limit=${limit}`,
+    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`,
     { credentials: "include" }
   );
 
