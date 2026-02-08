@@ -98,6 +98,12 @@ nul
 # ML Models
 # =========================
 models/
+faceapi-models/
+
+# =========================
+# Thumbnail cache
+# =========================
+thumb-cache/
 
 # =========================
 # Separate nested repo (Expo / mobile) - ignore entirely
