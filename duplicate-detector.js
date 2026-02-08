@@ -135,7 +135,7 @@ export async function getDuplicateGroups() {
   const result = [];
   for (const g of groups) {
     const photos = await dbAll(
-      `SELECT id, filename, filepath, date_taken, width, height
+      `SELECT id, filename, filepath, date_taken, width, height, is_deleted
        FROM photos
        WHERE duplicate_group_id = ?
        ORDER BY date_taken ASC, id ASC`,
@@ -158,7 +158,7 @@ export async function getBurstGroups() {
   const result = [];
   for (const g of groups) {
     const photos = await dbAll(
-      `SELECT id, filename, filepath, date_taken, width, height
+      `SELECT id, filename, filepath, date_taken, width, height, is_deleted
        FROM photos
        WHERE burst_id = ?
        ORDER BY date_taken ASC, id ASC`,

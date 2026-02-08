@@ -6,7 +6,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+
+    "start": "node server.js",
     "server": "node server.js",
+
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "node server.js",
+
+    "dev:all": "start \"backend\" cmd /c \"node server.js\" && start \"frontend\" cmd /c \"npm --prefix frontend run dev\"",
+
     "scan-faces": "node scan-faces.js",
     "scan-faces:test": "node scan-faces.js --limit 10 --verbose",
     "scan-duplicates": "node scan-duplicates.js",
@@ -15,6 +23,10 @@
     "populate-paths:test": "node populate-photo-paths.js --limit 10 --verbose --dry-run"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.15",
     "canvas": "^2.11.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
