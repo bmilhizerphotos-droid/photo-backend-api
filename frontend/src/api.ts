@@ -17,5 +17,6 @@ export async function fetchPhotos(offset = 0, limit = 50) {
     throw new Error("Failed to fetch photos");
   }
 
-  return res.json();
+  const data = await res.json();
+  return data.photos ?? data;
 }

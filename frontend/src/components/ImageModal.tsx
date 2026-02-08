@@ -6,16 +6,17 @@ interface ImageModalProps {
 }
 
 export function ImageModal({ imageUrl, onClose }: ImageModalProps) {
-  if (!imageUrl) return null;
-
-  // ESC key support
+  // ESC key support — must be before any early return (Rules of Hooks)
   useEffect(() => {
+    if (!imageUrl) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [imageUrl, onClose]);
+
+  if (!imageUrl) return null;
 
   return (
     <div
