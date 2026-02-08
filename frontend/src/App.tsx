@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { fetchPhotos, fetchAlbums, Photo, Album } from "./api";
 import { useInfinitePhotos } from "./hooks/useInfinitePhotos";
+import { useIntersectionSentinel } from "./hooks/useIntersectionSentinel";
 import { usePhotoSelection } from "./hooks/usePhotoSelection";
 import { PhotoMasonry } from "./components/PhotoMasonry";
 import { ImageModal } from "./components/ImageModal";
@@ -25,6 +26,11 @@ export default function App() {
     selectMode,
     toggleSelection,
   } = usePhotoSelection(photos);
+
+  const sentinelRef = useIntersectionSentinel({
+    enabled: hasMore && !loading,
+    onIntersect: loadMore,
+  });
 
   // Load albums for sidebar
   useEffect(() => {
@@ -58,9 +64,7 @@ export default function App() {
               selectedIds={selectedIds}
               selectMode={selectMode}
             />
-            {hasMore && !loading && (
-              <div className="h-10" onMouseEnter={loadMore} />
-            )}
+            <div ref={sentinelRef} className="h-10" />
           </>
         );
       default:
