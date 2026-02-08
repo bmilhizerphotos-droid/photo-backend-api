@@ -56,7 +56,12 @@ There are no test suites configured. The `:test` script variants run the process
 - `duplicate-detector.js` - SHA256 hashing for exact duplicates, 2-second time window + same resolution for burst grouping.
 - `gemini-narrative.js` - Google Gemini 2.0 Flash for generating memory titles/narratives with retry logic.
 
-**Deployment:** GitHub Actions builds frontend and deploys to Firebase Hosting. Backend can run standalone or via PM2 (`ecosystem.config.cjs`).
+**Deployment:**
+- Frontend: GitHub Actions builds and deploys to Firebase Hosting on push to `main`.
+- Backend: Runs via PM2 (`ecosystem.config.cjs`), auto-starts on boot via `pm2-windows-startup`.
+- Tunnel: Cloudflare Tunnel (`photo-backend`) runs as a Windows service, exposing the backend at `api.milhizerfamilyphotos.org`.
+- Production frontend: `https://photos.milhizerfamilyphotos.org` (Firebase Hosting).
+- Production API: `https://api.milhizerfamilyphotos.org` (Cloudflare Tunnel → `127.0.0.1:3001`).
 
 ## Key Environment Variables
 
@@ -79,3 +84,12 @@ All API endpoints are under `/api/`. Key routes:
 ## Database
 
 SQLite with tables including `photos`, `faces`, `face_jobs`, and FTS5 virtual tables. Schema is initialized in `db.js` and extended by individual modules. Face bounding box coordinates are stored as normalized floats (0-1 range).
+
+## Critical Patterns / Gotchas
+
+- **API response envelope:** Server returns `{ offset, limit, total, photos: [...] }`. Frontend must unwrap `.photos` — do not pass the envelope directly to state.
+- **VITE_API_BASE_URL:** All frontend `fetch` calls must prefix with `import.meta.env.VITE_API_BASE_URL` for production. Relative `/api/` paths only work in dev via Vite proxy. The env var is set in `frontend/.env.production` and injected as a GitHub Actions secret during CI build.
+- **CORS + credentials:** Backend uses `cors()` with wildcard `*`. Never use `credentials: "include"` in fetch calls — browsers reject `Access-Control-Allow-Origin: *` with credentials.
+- **Photo loading:** Uses `useIntersectionSentinel` hook (IntersectionObserver with 800px root margin) to trigger `loadMore`. Do not replace with `onMouseEnter` — it fails when the sentinel isn't under the cursor on page load.
+- **React hooks ordering:** Never put hooks after early returns (Rules of Hooks violation). Guard inside the hook body instead.
+- **Firebase deploy paths:** `firebase.json` lives in `frontend/` and the CI `entryPoint` is `./frontend`, so `"public"` must be relative to that directory (`"dist"`, not `"frontend/dist"`).
