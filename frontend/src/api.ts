@@ -7,6 +7,18 @@ export interface Photo {
   filename: string;
   thumbnail_url: string;
   image_url: string;
+  [key: string]: any;
+}
+
+export interface Album {
+  id: number;
+  name: string;
+  description: string | null;
+  coverPhotoId: number | null;
+  coverPhotoUrl: string | null;
+  photoCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export async function fetchPhotos(offset = 0, limit = 50) {
@@ -20,4 +32,11 @@ export async function fetchPhotos(offset = 0, limit = 50) {
 
   const data = await res.json();
   return data.photos ?? data;
+}
+
+export async function fetchAlbums(): Promise<Album[]> {
+  const res = await fetch(`${API_BASE}/api/albums`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : data.albums ?? [];
 }
