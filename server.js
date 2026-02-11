@@ -155,6 +155,7 @@ async function runVisionFallbackSearch(query) {
   if (!visionEnabled) return [];
 
   const maxCandidates = Math.max(20, Number(process.env.SEARCH_VISION_CANDIDATES || 180));
+  const visionConcurrency = Math.max(1, Math.min(8, Number(process.env.SEARCH_VISION_CONCURRENCY || 3)));
   const terms = mergeTerms(query, []);
   const candidateIds = new Set();
 
@@ -199,10 +200,36 @@ async function runVisionFallbackSearch(query) {
   // Fill remainder with recent photos as a general fallback
   if (candidateIds.size < maxCandidates) {
     const remaining = maxCandidates - candidateIds.size;
-    const recent = await dbAll(
-      `SELECT id FROM photos WHERE full_path IS NOT NULL ORDER BY id DESC LIMIT ?`,
-      [Math.max(remaining * 2, 80)]
-    );
+    let spread = [];
+
+    try {
+      // Spread candidates across the full timeline to avoid over-favoring only recent photos.
+      spread = await dbAll(
+        `
+        WITH timeline AS (
+          SELECT
+            id,
+            ntile(?) OVER (ORDER BY id DESC) AS bucket
+          FROM photos
+          WHERE full_path IS NOT NULL
+        )
+        SELECT MAX(id) AS id
+        FROM timeline
+        GROUP BY bucket
+        ORDER BY id DESC
+        `,
+        [Math.max(remaining * 2, 80)]
+      );
+    } catch {
+      // ignore and use simple recent fallback below
+    }
+
+    const recent = spread?.length
+      ? spread
+      : await dbAll(
+          `SELECT id FROM photos WHERE full_path IS NOT NULL ORDER BY id DESC LIMIT ?`,
+          [Math.max(remaining * 2, 80)]
+        );
 
     for (const row of recent || []) {
       candidateIds.add(Number(row.id));
@@ -220,15 +247,22 @@ async function runVisionFallbackSearch(query) {
   );
 
   const results = [];
-  for (const photo of candidates || []) {
-    if (!fileExists(photo.full_path)) continue;
+  const queue = [...(candidates || [])];
 
-    const score = await scorePhotoWithVisionAI(query, photo);
-    if (score === null) continue;
-    if (score >= 0.58) {
-      results.push({ id: photo.id, score });
+  async function worker() {
+    while (queue.length) {
+      const photo = queue.shift();
+      if (!photo || !fileExists(photo.full_path)) continue;
+
+      const score = await scorePhotoWithVisionAI(query, photo);
+      if (score === null) continue;
+      if (score >= 0.58) {
+        results.push({ id: photo.id, score });
+      }
     }
   }
+
+  await Promise.all(Array.from({ length: visionConcurrency }, () => worker()));
 
   results.sort((a, b) => b.score - a.score);
   const top = results.slice(0, 40);
