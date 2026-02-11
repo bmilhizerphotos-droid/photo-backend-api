@@ -154,8 +154,69 @@ async function runVisionFallbackSearch(query) {
   const visionEnabled = (process.env.SEARCH_VISION_ENABLED || "true").toLowerCase() !== "false";
   if (!visionEnabled) return [];
 
+  const maxCandidates = Math.max(20, Number(process.env.SEARCH_VISION_CANDIDATES || 180));
+  const terms = mergeTerms(query, []);
+  const candidateIds = new Set();
+
+  // Prefer semantically likely candidates first when label index exists
+  if (await tableExists("photo_ai_labels")) {
+    for (const term of terms.slice(0, 8)) {
+      const rows = await dbAll(
+        `
+        SELECT photo_id
+        FROM photo_ai_labels
+        WHERE lower(label) LIKE ?
+        ORDER BY confidence DESC
+        LIMIT 120
+        `,
+        [`%${term}%`]
+      );
+
+      for (const row of rows || []) {
+        candidateIds.add(Number(row.photo_id));
+        if (candidateIds.size >= maxCandidates) break;
+      }
+      if (candidateIds.size >= maxCandidates) break;
+    }
+  }
+
+  // Add filename-based candidates for broad textual hints
+  if (candidateIds.size < maxCandidates) {
+    for (const term of terms.slice(0, 8)) {
+      const rows = await dbAll(
+        `SELECT id FROM photos WHERE lower(filename) LIKE ? ORDER BY id DESC LIMIT 80`,
+        [`%${term}%`]
+      );
+
+      for (const row of rows || []) {
+        candidateIds.add(Number(row.id));
+        if (candidateIds.size >= maxCandidates) break;
+      }
+      if (candidateIds.size >= maxCandidates) break;
+    }
+  }
+
+  // Fill remainder with recent photos as a general fallback
+  if (candidateIds.size < maxCandidates) {
+    const remaining = maxCandidates - candidateIds.size;
+    const recent = await dbAll(
+      `SELECT id FROM photos WHERE full_path IS NOT NULL ORDER BY id DESC LIMIT ?`,
+      [Math.max(remaining * 2, 80)]
+    );
+
+    for (const row of recent || []) {
+      candidateIds.add(Number(row.id));
+      if (candidateIds.size >= maxCandidates) break;
+    }
+  }
+
+  if (!candidateIds.size) return [];
+
+  const ids = [...candidateIds].slice(0, maxCandidates);
+  const placeholders = ids.map(() => "?").join(",");
   const candidates = await dbAll(
-    `SELECT id, filename, full_path FROM photos WHERE full_path IS NOT NULL ORDER BY id DESC LIMIT 40`
+    `SELECT id, filename, full_path FROM photos WHERE id IN (${placeholders}) ORDER BY id DESC`,
+    ids
   );
 
   const results = [];
@@ -170,7 +231,7 @@ async function runVisionFallbackSearch(query) {
   }
 
   results.sort((a, b) => b.score - a.score);
-  const top = results.slice(0, 30);
+  const top = results.slice(0, 40);
   setCachedVisionResults(query, top);
   return top;
 }
