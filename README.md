@@ -119,6 +119,11 @@ PORT=3001
 
 # Root directory for photos (default: G:/Photos)
 PHOTO_ROOT=G:/Photos
+
+# AI search blending controls
+SEARCH_VISION_BLEND=true
+SEARCH_VISION_STRONG_SCORE=12
+SEARCH_VISION_MIN_RESULTS=6
 ```
 
 ### Photo Directory (Alternative Method)

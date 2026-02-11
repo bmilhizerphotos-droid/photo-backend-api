@@ -627,11 +627,24 @@ app.get("/api/search", async (req, res) => {
   }
 
   // 7) True AI visual fallback: inspect recent images with vision model
+  const visionBlendEnabled = (process.env.SEARCH_VISION_BLEND || "true").toLowerCase() !== "false";
+  const visionStrongScoreThreshold = Number(process.env.SEARCH_VISION_STRONG_SCORE || 12);
+  const visionMinResultsForSkip = Number(process.env.SEARCH_VISION_MIN_RESULTS || 6);
+
+  const currentTopScore = scores.size > 0 ? Math.max(...scores.values()) : 0;
+  const shouldUseVision = visionBlendEnabled && (
+    scores.size === 0 ||
+    scores.size < visionMinResultsForSkip ||
+    currentTopScore < visionStrongScoreThreshold
+  );
+
   let visionFallbackCount = 0;
-  if (scores.size === 0) {
+  if (shouldUseVision) {
     const visionMatches = await runVisionFallbackSearch(q);
     for (const m of visionMatches) {
-      addScore(m.id, 12 + Math.round(m.score * 10), "vision_fallback");
+      // blend with existing scores instead of only all-or-nothing fallback
+      const visionBoost = 8 + Math.round(m.score * 8);
+      addScore(m.id, visionBoost, "vision_fallback");
     }
     visionFallbackCount = visionMatches.length;
   }
@@ -679,6 +692,14 @@ app.get("/api/search", async (req, res) => {
         total: responsePhotos.length,
         ftsMatched,
         visionFallbackCount,
+      },
+      thresholds: {
+        visionStrongScoreThreshold,
+        visionMinResultsForSkip,
+      },
+      runtime: {
+        currentTopScore,
+        shouldUseVision,
       },
     };
   }
