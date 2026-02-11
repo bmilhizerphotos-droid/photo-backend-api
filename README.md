@@ -73,6 +73,7 @@ A modern photo gallery backend API built with Node.js, Express, and SQLite. Feat
 ### Photos
 - `GET /api/photos?limit=50&offset=0` - Get paginated photos
 - `GET /api/search?q=family+beach` - Search photos (AI-assisted)
+- `GET /api/search?q=dog&debug=1` - Search with score/source debug metadata
 - `GET /api/search/index-status` - AI label index coverage stats
 - `GET /thumbnails/:id` - Get photo thumbnail
 - `GET /photos/:id` - Get full-size photo

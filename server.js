@@ -491,14 +491,27 @@ app.get("/api/search", async (req, res) => {
   const q = (req.query.q || "").trim();
   if (!q) return res.json({ photos: [] });
 
+  const debug = req.query.debug === "1";
   const base = getBaseUrl(req);
 
   const scores = new Map();
-  const addScore = (id, weight) => {
+  const sourceScores = new Map();
+  const addScore = (id, weight, source) => {
     if (!Number.isFinite(Number(id))) return;
     const photoId = Number(id);
-    scores.set(photoId, (scores.get(photoId) || 0) + weight);
+    const w = Number(weight) || 0;
+    scores.set(photoId, (scores.get(photoId) || 0) + w);
+
+    if (debug && source) {
+      const prev = sourceScores.get(photoId) || {};
+      prev[source] = (prev[source] || 0) + w;
+      sourceScores.set(photoId, prev);
+    }
   };
+
+  const hasTags = (await tableExists("tags")) && (await tableExists("photo_tags"));
+  const hasPeople = (await tableExists("people")) && (await tableExists("photo_people"));
+  const hasAiLabels = await tableExists("photo_ai_labels");
 
   // 1) AI-assisted expansion for natural-language queries
   const aiTerms = await expandSearchTermsWithAI(q);
@@ -506,9 +519,11 @@ app.get("/api/search", async (req, res) => {
 
   // 2) Existing FTS index (if available)
   const searchDbFile = path.join(process.cwd(), "photo-search.sqlite");
+  let ftsMatched = 0;
   if (fileExists(searchDbFile)) {
+    let searchDb = null;
     try {
-      const searchDb = await openSqlite({
+      searchDb = await openSqlite({
         filename: searchDbFile,
         driver: sqlite3.Database,
       });
@@ -525,17 +540,24 @@ app.get("/api/search", async (req, res) => {
           [ftsExpr]
         );
 
-        for (const row of matches || []) addScore(row.photo_id, 10);
+        for (const row of matches || []) addScore(row.photo_id, 10, "fts");
+        ftsMatched = (matches || []).length;
       }
-
-      await searchDb.close();
     } catch {
       // Ignore FTS failures and continue with metadata + AI search
+    } finally {
+      if (searchDb) {
+        try {
+          await searchDb.close();
+        } catch {
+          // ignore close errors
+        }
+      }
     }
   }
 
   // 3) Match tags (best signal for semantic search)
-  if ((await tableExists("tags")) && (await tableExists("photo_tags"))) {
+  if (hasTags) {
     for (const term of terms) {
       const rows = await dbAll(
         `
@@ -548,12 +570,12 @@ app.get("/api/search", async (req, res) => {
         [`%${term}%`]
       );
 
-      for (const row of rows || []) addScore(row.photo_id, 6);
+      for (const row of rows || []) addScore(row.photo_id, 6, "tags");
     }
   }
 
   // 4) Match recognized people names
-  if ((await tableExists("people")) && (await tableExists("photo_people"))) {
+  if (hasPeople) {
     for (const term of terms) {
       const rows = await dbAll(
         `
@@ -566,12 +588,12 @@ app.get("/api/search", async (req, res) => {
         [`%${term}%`]
       );
 
-      for (const row of rows || []) addScore(row.photo_id, 5);
+      for (const row of rows || []) addScore(row.photo_id, 5, "people");
     }
   }
 
   // 5) Match pre-indexed AI labels (vision-generated)
-  if (await tableExists("photo_ai_labels")) {
+  if (hasAiLabels) {
     for (const term of terms) {
       const rows = await dbAll(
         `
@@ -589,7 +611,7 @@ app.get("/api/search", async (req, res) => {
         const boost = Number.isFinite(confidence)
           ? 6 + Math.round(Math.max(0, Math.min(1, confidence)) * 4)
           : 8;
-        addScore(row.photo_id, boost);
+        addScore(row.photo_id, boost, "ai_labels");
       }
     }
   }
@@ -601,24 +623,27 @@ app.get("/api/search", async (req, res) => {
       [`%${term}%`]
     );
 
-    for (const row of rows || []) addScore(row.id, 2);
+    for (const row of rows || []) addScore(row.id, 2, "filename");
   }
 
   // 7) True AI visual fallback: inspect recent images with vision model
+  let visionFallbackCount = 0;
   if (scores.size === 0) {
     const visionMatches = await runVisionFallbackSearch(q);
     for (const m of visionMatches) {
-      addScore(m.id, 12 + Math.round(m.score * 10));
+      addScore(m.id, 12 + Math.round(m.score * 10), "vision_fallback");
     }
+    visionFallbackCount = visionMatches.length;
   }
 
-  const ids = [...scores.entries()]
+  const ranked = [...scores.entries()]
     .sort((a, b) => {
       if (b[1] !== a[1]) return b[1] - a[1];
       return b[0] - a[0];
     })
-    .slice(0, 100)
-    .map(([id]) => id);
+    .slice(0, 100);
+
+  const ids = ranked.map(([id]) => id);
 
   if (!ids.length) return res.json({ photos: [] });
 
@@ -626,13 +651,39 @@ app.get("/api/search", async (req, res) => {
   const photos = await dbAll(`SELECT * FROM photos WHERE id IN (${placeholders})`, ids);
   const byId = new Map((photos || []).map((p) => [p.id, p]));
 
-  res.json({
-    photos: ids.map((id) => byId.get(id)).filter(Boolean).map((p) => ({
+  const responsePhotos = ids.map((id) => byId.get(id)).filter(Boolean).map((p) => {
+    const score = scores.get(p.id) || 0;
+    const payload = {
       ...p,
       image_url: `${base}/api/photos/${p.id}/file`,
       thumbnail_url: `${base}/api/photos/${p.id}/thumbnail`,
-    })),
+      search_score: score,
+    };
+
+    if (debug) {
+      payload.search_sources = sourceScores.get(p.id) || {};
+    }
+
+    return payload;
   });
+
+  const result = { photos: responsePhotos };
+
+  if (debug) {
+    result.debug = {
+      query: q,
+      terms,
+      aiTerms,
+      tableSupport: { hasTags, hasPeople, hasAiLabels },
+      matched: {
+        total: responsePhotos.length,
+        ftsMatched,
+        visionFallbackCount,
+      },
+    };
+  }
+
+  res.json(result);
 });
 
 // =======================================================
