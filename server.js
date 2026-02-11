@@ -147,7 +147,7 @@ async function scorePhotoWithVisionAI(query, photo) {
   }
 }
 
-async function runVisionFallbackSearch(query) {
+async function runVisionFallbackSearch(query, seedTerms = []) {
   const cached = getCachedVisionResults(query);
   if (cached) return cached;
 
@@ -156,15 +156,22 @@ async function runVisionFallbackSearch(query) {
 
   const maxCandidates = Math.max(20, Number(process.env.SEARCH_VISION_CANDIDATES || 180));
   const visionConcurrency = Math.max(1, Math.min(8, Number(process.env.SEARCH_VISION_CONCURRENCY || 3)));
-  const terms = mergeTerms(query, []);
-  const candidateIds = new Set();
+  const terms = mergeTerms(query, seedTerms).slice(0, 10);
+  const candidateScores = new Map();
 
-  // Prefer semantically likely candidates first when label index exists
+  function addCandidate(id, score) {
+    const photoId = Number(id);
+    if (!Number.isFinite(photoId) || photoId <= 0) return;
+    const prev = candidateScores.get(photoId) || 0;
+    if (score > prev) candidateScores.set(photoId, score);
+  }
+
+  // Prefer semantically likely candidates first when label index exists.
   if (await tableExists("photo_ai_labels")) {
-    for (const term of terms.slice(0, 8)) {
+    for (const term of terms) {
       const rows = await dbAll(
         `
-        SELECT photo_id
+        SELECT photo_id, confidence
         FROM photo_ai_labels
         WHERE lower(label) LIKE ?
         ORDER BY confidence DESC
@@ -174,36 +181,31 @@ async function runVisionFallbackSearch(query) {
       );
 
       for (const row of rows || []) {
-        candidateIds.add(Number(row.photo_id));
-        if (candidateIds.size >= maxCandidates) break;
+        const confidence = Number(row.confidence);
+        const score = 100 + Math.round((Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.6) * 20);
+        addCandidate(row.photo_id, score);
       }
-      if (candidateIds.size >= maxCandidates) break;
     }
   }
 
-  // Add filename-based candidates for broad textual hints
-  if (candidateIds.size < maxCandidates) {
-    for (const term of terms.slice(0, 8)) {
-      const rows = await dbAll(
-        `SELECT id FROM photos WHERE lower(filename) LIKE ? ORDER BY id DESC LIMIT 80`,
-        [`%${term}%`]
-      );
+  // Add filename-based candidates for broad textual hints.
+  for (const term of terms) {
+    const rows = await dbAll(
+      `SELECT id FROM photos WHERE lower(filename) LIKE ? ORDER BY id DESC LIMIT 80`,
+      [`%${term}%`]
+    );
 
-      for (const row of rows || []) {
-        candidateIds.add(Number(row.id));
-        if (candidateIds.size >= maxCandidates) break;
-      }
-      if (candidateIds.size >= maxCandidates) break;
+    for (const row of rows || []) {
+      addCandidate(row.id, 60);
     }
   }
 
-  // Fill remainder with recent photos as a general fallback
-  if (candidateIds.size < maxCandidates) {
-    const remaining = maxCandidates - candidateIds.size;
+  // Fill remainder across timeline to avoid recency-only bias.
+  if (candidateScores.size < maxCandidates) {
+    const remaining = maxCandidates - candidateScores.size;
     let spread = [];
 
     try {
-      // Spread candidates across the full timeline to avoid over-favoring only recent photos.
       spread = await dbAll(
         `
         WITH timeline AS (
@@ -232,22 +234,31 @@ async function runVisionFallbackSearch(query) {
         );
 
     for (const row of recent || []) {
-      candidateIds.add(Number(row.id));
-      if (candidateIds.size >= maxCandidates) break;
+      addCandidate(row.id, 20);
     }
   }
 
-  if (!candidateIds.size) return [];
+  if (!candidateScores.size) return [];
 
-  const ids = [...candidateIds].slice(0, maxCandidates);
+  const ids = [...candidateScores.entries()]
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return b[0] - a[0];
+    })
+    .slice(0, maxCandidates)
+    .map(([id]) => id);
+
   const placeholders = ids.map(() => "?").join(",");
   const candidates = await dbAll(
     `SELECT id, filename, full_path FROM photos WHERE id IN (${placeholders}) ORDER BY id DESC`,
     ids
   );
 
+  const byId = new Map((candidates || []).map((p) => [Number(p.id), p]));
+  const orderedCandidates = ids.map((id) => byId.get(id)).filter(Boolean);
+
   const results = [];
-  const queue = [...(candidates || [])];
+  const queue = [...orderedCandidates];
 
   async function worker() {
     while (queue.length) {
@@ -735,7 +746,7 @@ app.get("/api/search", async (req, res) => {
 
   let visionFallbackCount = 0;
   if (shouldUseVision) {
-    const visionMatches = await runVisionFallbackSearch(q);
+    const visionMatches = await runVisionFallbackSearch(q, terms);
     for (const m of visionMatches) {
       // blend with existing scores instead of only all-or-nothing fallback
       const visionBoost = 8 + Math.round(m.score * 8);
