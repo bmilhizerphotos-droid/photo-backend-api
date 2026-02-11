@@ -1,5 +1,6 @@
 import React from "react";
 import type { Photo } from "../api";
+import { getApiBase } from "../config/apiBase";
 
 type Props = {
   photos: Photo[];
@@ -26,18 +27,8 @@ export function PhotoMasonry({
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   }, []);
 
-  // Best-effort API base (supports a couple common Vite env names).
-  // If no env is present, use relative /api which works with Vite proxy in dev.
-  const apiBase = React.useMemo(() => {
-    const env = (import.meta as any)?.env ?? {};
-    const base =
-      env.VITE_API_BASE_URL ??
-      env.VITE_API_BASE ??
-      env.VITE_API_URL ??
-      env.VITE_BACKEND_URL ??
-      "";
-    return typeof base === "string" ? base.replace(/\/+$/, "") : "";
-  }, []);
+  // Resolve API base with local-dev guard rails to prefer Vite proxy.
+  const apiBase = React.useMemo(() => getApiBase(), []);
 
   const resolveThumbnailSrc = React.useCallback(
     (p: Photo) => {
