@@ -9,6 +9,8 @@ import cors from "cors";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
 import sharp from "sharp";
+import sqlite3 from "sqlite3";
+import { open as openSqlite } from "sqlite";
 
 import { dbGet, dbAll } from "./db.js";
 
@@ -40,6 +42,11 @@ async function tableExists(table) {
   return !!row;
 }
 
+async function columnExists(table, column) {
+  const rows = await dbAll(`PRAGMA table_info(${table})`);
+  return rows.some((r) => r.name === column);
+}
+
 function getBaseUrl(req) {
   const proto = req.get("x-forwarded-proto") || req.protocol;
   const host = req.get("x-forwarded-host") || req.get("host");
@@ -65,14 +72,22 @@ app.get("/health", async (_req, res) => {
 });
 
 // =======================================================
-// ALBUMS
+// ALBUMS (SCHEMA-SAFE)
 // =======================================================
 
 app.get("/api/albums", async (_req, res) => {
   if (!(await tableExists("albums"))) return res.json([]);
-  const rows = await dbAll(
-    `SELECT id, name, photo_count AS photoCount FROM albums ORDER BY id DESC`
-  );
+
+  const hasPhotoCount = await columnExists("albums", "photo_count");
+
+  const rows = hasPhotoCount
+    ? await dbAll(
+        `SELECT id, name, photo_count AS photoCount FROM albums ORDER BY id DESC`
+      )
+    : await dbAll(
+        `SELECT id, name, NULL AS photoCount FROM albums ORDER BY id DESC`
+      );
+
   res.json(rows || []);
 });
 
@@ -108,7 +123,7 @@ async function getPhotoById(id) {
 }
 
 // =======================================================
-// FILE STREAMING (FIXED)
+// FILE STREAMING
 // =======================================================
 
 app.get("/api/photos/:id/file", async (req, res) => {
@@ -121,7 +136,14 @@ app.get("/api/photos/:id/file", async (req, res) => {
   const stat = fs.statSync(photo.full_path);
   const fileSize = stat.size;
   const ext = path.extname(photo.full_path).toLowerCase();
-  const mimeTypes = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic" };
+  const mimeTypes = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+  };
   const contentType = mimeTypes[ext] || "image/jpeg";
   const range = req.headers.range;
 
@@ -177,6 +199,52 @@ app.get("/api/photos/:id/thumbnail", async (req, res) => {
 });
 
 // =======================================================
+// SEARCH (READ-ONLY, ISOLATED)
+// =======================================================
+
+app.get("/api/search", async (req, res) => {
+  const q = (req.query.q || "").trim();
+  if (!q) return res.json({ photos: [] });
+
+  const base = getBaseUrl(req);
+
+  const searchDb = await openSqlite({
+    filename: path.join(process.cwd(), "photo-search.sqlite"),
+    driver: sqlite3.Database,
+  });
+
+  const matches = await searchDb.all(
+    `
+    SELECT photo_id
+    FROM photo_search_fts
+    WHERE photo_search_fts MATCH ?
+    LIMIT 100
+    `,
+    [q]
+  );
+
+  await searchDb.close();
+
+  if (!matches.length) return res.json({ photos: [] });
+
+  const ids = matches.map((m) => m.photo_id);
+  const placeholders = ids.map(() => "?").join(",");
+
+  const photos = await dbAll(
+    `SELECT * FROM photos WHERE id IN (${placeholders}) ORDER BY id DESC`,
+    ids
+  );
+
+  res.json({
+    photos: (photos || []).map((p) => ({
+      ...p,
+      image_url: `${base}/api/photos/${p.id}/file`,
+      thumbnail_url: `${base}/api/photos/${p.id}/thumbnail`,
+    })),
+  });
+});
+
+// =======================================================
 // PEOPLE
 // =======================================================
 
@@ -184,8 +252,9 @@ app.get("/api/people", async (req, res) => {
   if (!(await tableExists("people"))) return res.json([]);
 
   const base = getBaseUrl(req);
+
   const rows = await dbAll(
-    `SELECT id, name, photo_count, thumbnail_photo_id FROM people ORDER BY photo_count DESC`
+    `SELECT id, name, thumbnail_photo_id, photo_count FROM people ORDER BY photo_count DESC`
   );
 
   res.json(
@@ -198,6 +267,26 @@ app.get("/api/people", async (req, res) => {
         : null,
     }))
   );
+});
+
+app.get("/api/people/unidentified", async (_req, res) => {
+  if (!(await tableExists("faces"))) {
+    return res.json({ photoCount: 0, faceCount: 0 });
+  }
+
+  const row = await dbGet(`
+    SELECT
+      COUNT(DISTINCT f.photo_id) AS photoCount,
+      COUNT(*) AS faceCount
+    FROM faces f
+    LEFT JOIN photo_people pp ON pp.photo_id = f.photo_id
+    WHERE pp.photo_id IS NULL
+  `);
+
+  res.json({
+    photoCount: row?.photoCount ?? 0,
+    faceCount: row?.faceCount ?? 0,
+  });
 });
 
 app.get("/api/people/:id/photos", async (req, res) => {
@@ -223,26 +312,6 @@ app.get("/api/people/:id/photos", async (req, res) => {
       thumbnail_url: `${base}/api/photos/${p.id}/thumbnail`,
     }))
   );
-});
-
-app.get("/api/people/unidentified", async (_req, res) => {
-  if (!(await tableExists("faces"))) {
-    return res.json({ photoCount: 0, faceCount: 0 });
-  }
-
-  const row = await dbGet(`
-    SELECT
-      COUNT(DISTINCT f.photo_id) AS photoCount,
-      COUNT(*) AS faceCount
-    FROM faces f
-    LEFT JOIN photo_people pp ON pp.photo_id = f.photo_id
-    WHERE pp.photo_id IS NULL
-  `);
-
-  res.json({
-    photoCount: row?.photoCount ?? 0,
-    faceCount: row?.faceCount ?? 0,
-  });
 });
 
 // ---------------- START ----------------
