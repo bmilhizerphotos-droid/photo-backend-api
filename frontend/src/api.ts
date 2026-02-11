@@ -1,6 +1,10 @@
 // frontend/src/api.ts
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? "";
+// IMPORTANT:
+// - In dev: use relative /api (Vite proxy → no CORS)
+// - In prod: VITE_API_BASE_URL is injected at build time
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/+$/, "") ?? "";
 
 /* =====================
    TYPES
@@ -20,7 +24,7 @@ export interface Album {
   description: string | null;
   coverPhotoId: number | null;
   coverPhotoUrl: string | null;
-  photoCount: number;
+  photoCount: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,9 +41,11 @@ export interface Person {
    ===================== */
 
 export async function fetchPhotos(offset = 0, limit = 50) {
-  const res = await fetch(
-    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
-  );
+  const url = API_BASE
+    ? `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
+    : `/api/photos?offset=${offset}&limit=${limit}`;
+
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error("Failed to fetch photos");
   }
@@ -52,7 +58,8 @@ export async function fetchPhotos(offset = 0, limit = 50) {
    ===================== */
 
 export async function fetchAlbums(): Promise<Album[]> {
-  const res = await fetch(`${API_BASE}/api/albums`);
+  const url = API_BASE ? `${API_BASE}/api/albums` : `/api/albums`;
+  const res = await fetch(url);
   if (!res.ok) return [];
   return res.json();
 }
@@ -62,7 +69,8 @@ export async function fetchAlbums(): Promise<Album[]> {
    ===================== */
 
 export async function fetchPeople(): Promise<Person[]> {
-  const res = await fetch(`${API_BASE}/api/people`);
+  const url = API_BASE ? `${API_BASE}/api/people` : `/api/people`;
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error("Failed to fetch people");
   }
@@ -70,18 +78,43 @@ export async function fetchPeople(): Promise<Person[]> {
 }
 
 export async function fetchPersonPhotos(personId: number) {
-  const res = await fetch(`${API_BASE}/api/people/${personId}/photos`);
+  const url = API_BASE
+    ? `${API_BASE}/api/people/${personId}/photos`
+    : `/api/people/${personId}/photos`;
+
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error("Failed to fetch person photos");
   }
   return res.json();
 }
 
+/* =====================
+   SEARCH
+   ===================== */
+
+export async function searchPhotos(query: string): Promise<Photo[]> {
+  const url = API_BASE
+    ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}`
+    : `/api/search?q=${encodeURIComponent(query)}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error("Search failed");
+  }
+  const data = await res.json();
+  return Array.isArray(data?.photos) ? data.photos : [];
+}
+
 export async function fetchUnidentifiedCount(): Promise<{
   photoCount: number;
   faceCount: number;
 }> {
-  const res = await fetch(`${API_BASE}/api/people/unidentified`);
+  const url = API_BASE
+    ? `${API_BASE}/api/people/unidentified`
+    : `/api/people/unidentified`;
+
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error("Failed to fetch unidentified count");
   }

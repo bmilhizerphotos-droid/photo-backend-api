@@ -4,6 +4,7 @@ import {
   fetchAlbums,
   fetchPeople,
   fetchPersonPhotos,
+  searchPhotos,
   Photo,
   Album,
   Person,
@@ -30,6 +31,11 @@ export default function App() {
 
   const [modalImageUrl, setModalImageUrl] = useState<string | null>(null);
 
+  // 🔍 Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Photo[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+
   // Infinite-scroll photos
   const {
     photos,
@@ -38,8 +44,10 @@ export default function App() {
     loadMore,
   } = useInfinitePhotos(fetchPhotos, 50);
 
+  const searching = view === "photos" && searchQuery.trim().length > 0;
+
   const sentinelRef = useIntersectionSentinel({
-    enabled: view === "photos" && hasMore && !photosLoading,
+    enabled: view === "photos" && !searching && hasMore && !photosLoading,
     onIntersect: loadMore,
   });
 
@@ -73,6 +81,35 @@ export default function App() {
       cancelled = true;
     };
   }, [view]);
+
+  // 🔍 Run search when query changes
+  useEffect(() => {
+    if (!searching) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSearchLoading(true);
+
+    searchPhotos(searchQuery)
+      .then((photos) => {
+        if (cancelled) return;
+        setSearchResults(photos);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSearchResults([]);
+      })
+      .finally(() => {
+        setSearchLoading((prev) => (cancelled ? prev : false));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchQuery, searching]);
 
   const openPhoto = useCallback((p: Photo) => {
     const url = (p as any)?.image_url;
@@ -113,14 +150,27 @@ export default function App() {
           >
             ← Back to People
           </button>
-          <div className="text-lg font-semibold text-gray-900">{activePerson.name}</div>
+          <div className="text-lg font-semibold text-gray-900">
+            {activePerson.name}
+          </div>
           <div className="w-[110px]" />
         </div>
       );
     }
 
     if (view === "photos") {
-      return <div className="text-xl font-semibold mb-4">Photos</div>;
+      return (
+        <div className="mb-4">
+          <div className="text-xl font-semibold mb-2">Photos</div>
+          <input
+            type="text"
+            placeholder="Search photos (e.g. dog, beach, birthday)"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full max-w-md px-3 py-2 border rounded-md text-sm"
+          />
+        </div>
+      );
     }
 
     if (view === "people") {
@@ -128,28 +178,42 @@ export default function App() {
     }
 
     return null;
-  }, [view, activePerson]);
+  }, [view, activePerson, searchQuery]);
 
   const renderView = () => {
     if (view === "photos") {
+      if (searching) {
+        if (searchLoading) {
+          return <div className="text-gray-500">Searching…</div>;
+        }
+        return (
+          <PhotoMasonry
+            photos={searchResults}
+            onPhotoClick={(p) => openPhoto(p)}
+          />
+        );
+      }
+
       if (photosLoading && photos.length === 0) {
         return <div className="text-gray-500">Loading photos…</div>;
       }
+
       return (
         <>
-          <PhotoMasonry
-            photos={photos}
-            onPhotoClick={(p) => openPhoto(p)}
-            selectedIds={new Set()}
-            selectMode={false}
-          />
+          <PhotoMasonry photos={photos} onPhotoClick={(p) => openPhoto(p)} />
           <div ref={sentinelRef} className="h-10" />
         </>
       );
     }
 
     if (view === "people") {
-      return <PeopleGrid people={people} onPersonClick={loadPerson} loading={peopleLoading} />;
+      return (
+        <PeopleGrid
+          people={people}
+          onPersonClick={loadPerson}
+          loading={peopleLoading}
+        />
+      );
     }
 
     if (view === "person-detail" && activePerson) {
@@ -160,8 +224,6 @@ export default function App() {
         <PhotoMasonry
           photos={personPhotos}
           onPhotoClick={(p) => openPhoto(p)}
-          selectedIds={new Set()}
-          selectMode={false}
         />
       );
     }
@@ -191,7 +253,10 @@ export default function App() {
         {renderView()}
       </main>
 
-      <ImageModal imageUrl={modalImageUrl} onClose={() => setModalImageUrl(null)} />
+      <ImageModal
+        imageUrl={modalImageUrl}
+        onClose={() => setModalImageUrl(null)}
+      />
     </div>
   );
 }
