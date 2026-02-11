@@ -50,3 +50,24 @@ await dbRun(`
 
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces(photo_id)`);
 await dbRun(`CREATE INDEX IF NOT EXISTS idx_face_jobs_status ON face_jobs(status)`);
+
+/* ================================
+   AI SEARCH INDEX TABLES
+   ================================ */
+
+await dbRun(`
+  CREATE TABLE IF NOT EXISTS photo_ai_labels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    confidence REAL,
+    model TEXT,
+    source TEXT DEFAULT 'vision',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(photo_id, label),
+    FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+  )
+`);
+
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_ai_labels_photo ON photo_ai_labels(photo_id)`);
+await dbRun(`CREATE INDEX IF NOT EXISTS idx_photo_ai_labels_label ON photo_ai_labels(label)`);
