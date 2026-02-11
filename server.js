@@ -61,6 +61,272 @@ function fileExists(p) {
   }
 }
 
+
+const visionSearchCache = new Map();
+
+function getVisionCacheKey(query) {
+  return normalizeTerm(query);
+}
+
+function getCachedVisionResults(query) {
+  const key = getVisionCacheKey(query);
+  const entry = visionSearchCache.get(key);
+  if (!entry) return null;
+
+  // 5 minute TTL
+  if (Date.now() - entry.ts > 5 * 60 * 1000) {
+    visionSearchCache.delete(key);
+    return null;
+  }
+
+  return entry.results;
+}
+
+function setCachedVisionResults(query, results) {
+  const key = getVisionCacheKey(query);
+  visionSearchCache.set(key, { ts: Date.now(), results });
+}
+
+async function imageToBase64Jpeg(filePath) {
+  const buf = await sharp(filePath)
+    .rotate()
+    .resize({ width: 384, height: 384, fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 60 })
+    .toBuffer();
+
+  return buf.toString("base64");
+}
+
+async function scorePhotoWithVisionAI(query, photo) {
+  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+  const visionModel = process.env.SEARCH_VISION_MODEL || process.env.OLLAMA_VISION_MODEL || "llava:7b";
+
+  const prompt = `You are scoring photo search relevance.
+` +
+    `User query: "${query}"
+` +
+    `Return ONLY a decimal number between 0 and 1 where 1 is perfect match and 0 is no match.`;
+
+  const imageBase64 = await imageToBase64Jpeg(photo.full_path);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3500);
+
+  try {
+    const resp = await fetch(`${ollamaUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: visionModel,
+        prompt,
+        images: [imageBase64],
+        stream: false,
+        options: {
+          temperature: 0,
+          num_predict: 8,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) return null;
+
+    const data = await resp.json();
+    const raw = String(data?.response || "");
+    const match = raw.match(/\b(0(?:\.\d+)?|1(?:\.0+)?)\b/);
+    if (!match) return null;
+
+    const score = Number(match[1]);
+    if (!Number.isFinite(score)) return null;
+
+    return Math.max(0, Math.min(1, score));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function runVisionFallbackSearch(query) {
+  const cached = getCachedVisionResults(query);
+  if (cached) return cached;
+
+  const visionEnabled = (process.env.SEARCH_VISION_ENABLED || "true").toLowerCase() !== "false";
+  if (!visionEnabled) return [];
+
+  const candidates = await dbAll(
+    `SELECT id, filename, full_path FROM photos WHERE full_path IS NOT NULL ORDER BY id DESC LIMIT 40`
+  );
+
+  const results = [];
+  for (const photo of candidates || []) {
+    if (!fileExists(photo.full_path)) continue;
+
+    const score = await scorePhotoWithVisionAI(query, photo);
+    if (score === null) continue;
+    if (score >= 0.58) {
+      results.push({ id: photo.id, score });
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  const top = results.slice(0, 30);
+  setCachedVisionResults(query, top);
+  return top;
+}
+
+function tokenizeQuery(query) {
+  return [...new Set(
+    query
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2)
+  )];
+}
+
+function normalizeTerm(term) {
+  return String(term || "").toLowerCase().trim();
+}
+
+function addTermVariants(terms) {
+  const out = new Set();
+
+  for (const raw of terms || []) {
+    const t = normalizeTerm(raw);
+    if (!t || t.length < 2) continue;
+    out.add(t);
+
+    // light singular/plural handling helps queries like dog <-> dogs
+    if (t.endsWith("ies") && t.length > 3) out.add(`${t.slice(0, -3)}y`);
+    if (t.endsWith("s") && t.length > 3) out.add(t.slice(0, -1));
+    if (!t.endsWith("s")) out.add(`${t}s`);
+  }
+
+  return [...out].filter((t) => t.length >= 2 && t.length <= 32);
+}
+
+function mergeTerms(query, aiTerms = []) {
+  const seed = [normalizeTerm(query), ...tokenizeQuery(query), ...(aiTerms || []).map(normalizeTerm)];
+  return addTermVariants(seed);
+}
+
+function extractFirstJsonObject(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // continue to relaxed extraction
+  }
+
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (codeBlockMatch?.[1]) {
+    try {
+      return JSON.parse(codeBlockMatch[1].trim());
+    } catch {
+      // continue
+    }
+  }
+
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function buildFtsMatchExpression(terms) {
+  const expressions = [];
+
+  for (const raw of terms || []) {
+    const normalized = normalizeTerm(raw).replace(/"/g, " ").trim();
+    if (!normalized || normalized.length < 2) continue;
+
+    const words = normalized
+      .split(/[^a-z0-9]+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length >= 2);
+
+    if (!words.length) continue;
+
+    // phrase match for multi-word terms
+    if (words.length > 1) {
+      expressions.push(`"${words.join(" ")}"`);
+    }
+
+    // token-level prefix matching to catch singular/plural and partial forms
+    for (const word of words) {
+      expressions.push(`"${word}"`);
+      expressions.push(`${word}*`);
+    }
+  }
+
+  return [...new Set(expressions)].join(" OR ");
+}
+
+async function expandSearchTermsWithAI(query) {
+  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+  const ollamaModel = process.env.SEARCH_AI_MODEL || process.env.OLLAMA_MODEL || "llama3.2";
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1800);
+
+  try {
+    const prompt = `You expand natural language photo searches into concise terms.
+Given: "${query}"
+
+Return JSON only in this format:
+{"terms":["term 1","term 2","term 3"]}
+
+Rules:
+- 3 to 8 short terms
+- include direct objects, activities, places, mood, and event type when implied
+- lowercase only
+- no punctuation-heavy phrases`;
+
+    const resp = await fetch(`${ollamaUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: ollamaModel,
+        prompt,
+        stream: false,
+        options: {
+          temperature: 0.1,
+          num_predict: 120,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) return [];
+
+    const data = await resp.json();
+    const raw = String(data?.response || "").trim();
+    if (!raw) return [];
+
+    const parsed = extractFirstJsonObject(raw);
+    if (!Array.isArray(parsed?.terms)) return [];
+
+    return [...new Set(parsed.terms
+      .map((t) => String(t).toLowerCase().trim())
+      .filter((t) => t.length >= 2 && t.length <= 32)
+    )].slice(0, 8);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ---------------- HEALTH ----------------
 app.get("/health", async (_req, res) => {
   try {
@@ -202,41 +468,166 @@ app.get("/api/photos/:id/thumbnail", async (req, res) => {
 // SEARCH (READ-ONLY, ISOLATED)
 // =======================================================
 
+app.get("/api/search/index-status", async (_req, res) => {
+  if (!(await tableExists("photos"))) {
+    return res.json({ totalPhotos: 0, labeledPhotos: 0, coverage: 0 });
+  }
+
+  const total = await dbGet(`SELECT COUNT(*) AS c FROM photos`);
+
+  if (!(await tableExists("photo_ai_labels"))) {
+    return res.json({ totalPhotos: total?.c ?? 0, labeledPhotos: 0, coverage: 0 });
+  }
+
+  const labeled = await dbGet(`SELECT COUNT(DISTINCT photo_id) AS c FROM photo_ai_labels`);
+  const totalPhotos = Number(total?.c || 0);
+  const labeledPhotos = Number(labeled?.c || 0);
+  const coverage = totalPhotos > 0 ? Number((labeledPhotos / totalPhotos).toFixed(4)) : 0;
+
+  res.json({ totalPhotos, labeledPhotos, coverage });
+});
+
 app.get("/api/search", async (req, res) => {
   const q = (req.query.q || "").trim();
   if (!q) return res.json({ photos: [] });
 
   const base = getBaseUrl(req);
 
-  const searchDb = await openSqlite({
-    filename: path.join(process.cwd(), "photo-search.sqlite"),
-    driver: sqlite3.Database,
-  });
+  const scores = new Map();
+  const addScore = (id, weight) => {
+    if (!Number.isFinite(Number(id))) return;
+    const photoId = Number(id);
+    scores.set(photoId, (scores.get(photoId) || 0) + weight);
+  };
 
-  const matches = await searchDb.all(
-    `
-    SELECT photo_id
-    FROM photo_search_fts
-    WHERE photo_search_fts MATCH ?
-    LIMIT 100
-    `,
-    [q]
-  );
+  // 1) AI-assisted expansion for natural-language queries
+  const aiTerms = await expandSearchTermsWithAI(q);
+  const terms = mergeTerms(q, aiTerms);
 
-  await searchDb.close();
+  // 2) Existing FTS index (if available)
+  const searchDbFile = path.join(process.cwd(), "photo-search.sqlite");
+  if (fileExists(searchDbFile)) {
+    try {
+      const searchDb = await openSqlite({
+        filename: searchDbFile,
+        driver: sqlite3.Database,
+      });
 
-  if (!matches.length) return res.json({ photos: [] });
+      const ftsExpr = buildFtsMatchExpression(terms.length ? terms : [q]);
+      if (ftsExpr) {
+        const matches = await searchDb.all(
+          `
+          SELECT photo_id
+          FROM photo_search_fts
+          WHERE photo_search_fts MATCH ?
+          LIMIT 180
+          `,
+          [ftsExpr]
+        );
 
-  const ids = matches.map((m) => m.photo_id);
+        for (const row of matches || []) addScore(row.photo_id, 10);
+      }
+
+      await searchDb.close();
+    } catch {
+      // Ignore FTS failures and continue with metadata + AI search
+    }
+  }
+
+  // 3) Match tags (best signal for semantic search)
+  if ((await tableExists("tags")) && (await tableExists("photo_tags"))) {
+    for (const term of terms) {
+      const rows = await dbAll(
+        `
+        SELECT pt.photo_id AS photo_id
+        FROM photo_tags pt
+        JOIN tags t ON t.id = pt.tag_id
+        WHERE lower(t.name) LIKE ?
+        LIMIT 250
+        `,
+        [`%${term}%`]
+      );
+
+      for (const row of rows || []) addScore(row.photo_id, 6);
+    }
+  }
+
+  // 4) Match recognized people names
+  if ((await tableExists("people")) && (await tableExists("photo_people"))) {
+    for (const term of terms) {
+      const rows = await dbAll(
+        `
+        SELECT pp.photo_id AS photo_id
+        FROM photo_people pp
+        JOIN people pe ON pe.id = pp.person_id
+        WHERE lower(pe.name) LIKE ?
+        LIMIT 250
+        `,
+        [`%${term}%`]
+      );
+
+      for (const row of rows || []) addScore(row.photo_id, 5);
+    }
+  }
+
+  // 5) Match pre-indexed AI labels (vision-generated)
+  if (await tableExists("photo_ai_labels")) {
+    for (const term of terms) {
+      const rows = await dbAll(
+        `
+        SELECT photo_id, confidence
+        FROM photo_ai_labels
+        WHERE lower(label) LIKE ?
+        ORDER BY confidence DESC
+        LIMIT 300
+        `,
+        [`%${term}%`]
+      );
+
+      for (const row of rows || []) {
+        const confidence = Number(row.confidence);
+        const boost = Number.isFinite(confidence)
+          ? 6 + Math.round(Math.max(0, Math.min(1, confidence)) * 4)
+          : 8;
+        addScore(row.photo_id, boost);
+      }
+    }
+  }
+
+  // 6) Filename fallback so plain text still works
+  for (const term of terms) {
+    const rows = await dbAll(
+      `SELECT id FROM photos WHERE lower(filename) LIKE ? LIMIT 250`,
+      [`%${term}%`]
+    );
+
+    for (const row of rows || []) addScore(row.id, 2);
+  }
+
+  // 7) True AI visual fallback: inspect recent images with vision model
+  if (scores.size === 0) {
+    const visionMatches = await runVisionFallbackSearch(q);
+    for (const m of visionMatches) {
+      addScore(m.id, 12 + Math.round(m.score * 10));
+    }
+  }
+
+  const ids = [...scores.entries()]
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return b[0] - a[0];
+    })
+    .slice(0, 100)
+    .map(([id]) => id);
+
+  if (!ids.length) return res.json({ photos: [] });
+
   const placeholders = ids.map(() => "?").join(",");
-
-  const photos = await dbAll(
-    `SELECT * FROM photos WHERE id IN (${placeholders}) ORDER BY id DESC`,
-    ids
-  );
+  const photos = await dbAll(`SELECT * FROM photos WHERE id IN (${placeholders})`, ids);
+  const byId = new Map((photos || []).map((p) => [p.id, p]));
 
   res.json({
-    photos: (photos || []).map((p) => ({
+    photos: ids.map((id) => byId.get(id)).filter(Boolean).map((p) => ({
       ...p,
       image_url: `${base}/api/photos/${p.id}/file`,
       thumbnail_url: `${base}/api/photos/${p.id}/thumbnail`,

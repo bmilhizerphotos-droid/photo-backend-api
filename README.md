@@ -72,6 +72,8 @@ A modern photo gallery backend API built with Node.js, Express, and SQLite. Feat
 
 ### Photos
 - `GET /api/photos?limit=50&offset=0` - Get paginated photos
+- `GET /api/search?q=family+beach` - Search photos (AI-assisted)
+- `GET /api/search/index-status` - AI label index coverage stats
 - `GET /thumbnails/:id` - Get photo thumbnail
 - `GET /photos/:id` - Get full-size photo
 - `GET /health` - Health check
@@ -139,6 +141,9 @@ const allowedOrigins = [
 - `npm run server` - Start the backend API server
 - `npm run dev` - Start frontend development server (in frontend/ directory)
 - `npm run build` - Build frontend for production
+- `npm run index-ai-labels` - Generate persistent AI labels for photos (improves semantic search like "dog", "beach")
+- `npm run index-ai-labels:test` - Test AI labeling on a small batch
+  - Supports: `--concurrency N`, `--retry N`, `--rescan`, `--limit`, `--offset`
 
 ### Database Management
 - Photos are automatically indexed into SQLite
