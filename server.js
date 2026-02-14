@@ -140,6 +140,29 @@ app.get('/api/people/:id/photos', async (req, res) => {
   }
 });
 
+// Add AI search route if missing
+app.get('/api/ai/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) {
+      return res.status(400).json({ error: 'Query parameter "q" is required' });
+    }
+    
+    // Use FTS table for better search performance
+    const photos = await db.all(
+      `SELECT id, filename, thumbnail_url, image_url FROM photos 
+       WHERE id IN (SELECT docid FROM photo_search_fts WHERE photo_search_fts MATCH ?)
+       ORDER BY created_at DESC`,
+      [q]
+    );
+    
+    res.json({ photos });
+  } catch (error) {
+    console.error('AI Search error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
