@@ -25,11 +25,12 @@ app.get('/api/search', async (req, res) => {
       return res.status(400).json({ error: 'Query parameter "q" is required' });
     }
     
+    // Use FTS table for better search performance
     const photos = await db.all(
       `SELECT id, filename, thumbnail_url, image_url FROM photos 
-       WHERE filename LIKE ? OR full_path LIKE ? 
+       WHERE id IN (SELECT docid FROM photo_search_fts WHERE photo_search_fts MATCH ?)
        ORDER BY created_at DESC`,
-      [`%${q}%`, `%${q}%`]
+      [q]
     );
     
     res.json({ photos });
