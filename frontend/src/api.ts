@@ -77,7 +77,7 @@ export async function fetchPeople(): Promise<Person[]> {
   return res.json();
 }
 
-export async function fetchPersonPhotos(personId: number) {
+export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
   const url = API_BASE
     ? `${API_BASE}/api/people/${personId}/photos`
     : `/api/people/${personId}/photos`;
@@ -86,7 +86,8 @@ export async function fetchPersonPhotos(personId: number) {
   if (!res.ok) {
     throw new Error("Failed to fetch person photos");
   }
-  return res.json();
+  const data = await res.json();
+  return data.photos ?? data;
 }
 
 /* =====================
