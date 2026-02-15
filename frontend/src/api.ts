@@ -87,7 +87,14 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
     throw new Error("Failed to fetch person photos");
   }
   const data = await res.json();
-  return data.photos ?? data;
+  // Ensure we always return an array, even if the API returns a single photo object
+  if (Array.isArray(data)) {
+    return data;
+  } else if (data.photos && Array.isArray(data.photos)) {
+    return data.photos;
+  } else {
+    return [];
+  }
 }
 
 /* =====================
