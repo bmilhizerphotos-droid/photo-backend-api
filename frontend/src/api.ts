@@ -40,17 +40,23 @@ export interface Person {
    PHOTOS
    ===================== */
 
-export async function fetchPhotos(offset = 0, limit = 50) {
+export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
   const url = API_BASE
     ? `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
     : `/api/photos?offset=${offset}&limit=${limit}`;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Failed to fetch photos");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    return data.photos ?? data;
+  } catch (error) {
+    console.error("Error fetching photos:", error);
+    // Return empty array on failure to prevent app crash
+    return [];
   }
-  const data = await res.json();
-  return data.photos ?? data;
 }
 
 /* =====================
@@ -59,9 +65,16 @@ export async function fetchPhotos(offset = 0, limit = 50) {
 
 export async function fetchAlbums(): Promise<Album[]> {
   const url = API_BASE ? `${API_BASE}/api/albums` : `/api/albums`;
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  return res.json();
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch albums: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    console.error("Error fetching albums:", error);
+    return [];
+  }
 }
 
 /* =====================
@@ -70,11 +83,16 @@ export async function fetchAlbums(): Promise<Album[]> {
 
 export async function fetchPeople(): Promise<Person[]> {
   const url = API_BASE ? `${API_BASE}/api/people` : `/api/people`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Failed to fetch people");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch people: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    console.error("Error fetching people:", error);
+    return [];
   }
-  return res.json();
 }
 
 export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
@@ -82,17 +100,22 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
     ? `${API_BASE}/api/people/${personId}/photos`
     : `/api/people/${personId}/photos`;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Failed to fetch person photos");
-  }
-  const data = await res.json();
-  // Ensure we always return an array, even if the API returns a single photo object
-  if (Array.isArray(data)) {
-    return data;
-  } else if (data.photos && Array.isArray(data.photos)) {
-    return data.photos;
-  } else {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch person photos: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    // Ensure we always return an array, even if the API returns a single photo object
+    if (Array.isArray(data)) {
+      return data;
+    } else if (data.photos && Array.isArray(data.photos)) {
+      return data.photos;
+    } else {
+      return [];
+    }
+  } catch (error) {
+    console.error("Error fetching person photos:", error);
     return [];
   }
 }
@@ -106,12 +129,17 @@ export async function searchPhotos(query: string): Promise<Photo[]> {
     ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}`
     : `/api/search?q=${encodeURIComponent(query)}`;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Search failed");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Search failed: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+    return Array.isArray(data?.photos) ? data.photos : [];
+  } catch (error) {
+    console.error("Error searching photos:", error);
+    return [];
   }
-  const data = await res.json();
-  return Array.isArray(data?.photos) ? data.photos : [];
 }
 
 export async function fetchUnidentifiedCount(): Promise<{
@@ -122,9 +150,14 @@ export async function fetchUnidentifiedCount(): Promise<{
     ? `${API_BASE}/api/people/unidentified`
     : `/api/people/unidentified`;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Failed to fetch unidentified count");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch unidentified count: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    console.error("Error fetching unidentified count:", error);
+    return { photoCount: 0, faceCount: 0 };
   }
-  return res.json();
 }
