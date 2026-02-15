@@ -57,6 +57,7 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
   } catch (error: any) {
     if (error.name === 'AbortError') {
       console.error("Timeout fetching photos");
+      throw new Error("Request timeout - please check your internet connection");
     } else {
       console.error("Error fetching photos:", error);
     }
@@ -82,6 +83,7 @@ export async function fetchAlbums(): Promise<Album[]> {
   } catch (error: any) {
     if (error.name === 'AbortError') {
       console.error("Timeout fetching albums");
+      throw new Error("Request timeout - please check your internet connection");
     } else {
       console.error("Error fetching albums:", error);
     }
@@ -106,6 +108,7 @@ export async function fetchPeople(): Promise<Person[]> {
   } catch (error: any) {
     if (error.name === 'AbortError') {
       console.error("Timeout fetching people");
+      throw new Error("Request timeout - please check your internet connection");
     } else {
       console.error("Error fetching people:", error);
     }
@@ -137,6 +140,7 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
   } catch (error: any) {
     if (error.name === 'AbortError') {
       console.error("Timeout fetching person photos");
+      throw new Error("Request timeout - please check your internet connection");
     } else {
       console.error("Error fetching person photos:", error);
     }
@@ -165,6 +169,7 @@ export async function searchPhotos(query: string): Promise<Photo[]> {
   } catch (error: any) {
     if (error.name === 'AbortError') {
       console.error("Timeout searching photos");
+      throw new Error("Request timeout - please check your internet connection");
     } else {
       console.error("Error searching photos:", error);
     }
@@ -191,6 +196,7 @@ export async function fetchUnidentifiedCount(): Promise<{
   } catch (error: any) {
     if (error.name === 'AbortError') {
       console.error("Timeout fetching unidentified count");
+      throw new Error("Request timeout - please check your internet connection");
     } else {
       console.error("Error fetching unidentified count:", error);
     }
