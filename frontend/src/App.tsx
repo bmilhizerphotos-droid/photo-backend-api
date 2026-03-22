@@ -38,15 +38,19 @@ export default function App() {
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
 
-  // 🔍 Search state
-  const [searchQuery, setSearchQuery] = useState("");
+  // 🔍 Search state — input is debounced before triggering search
+  const [searchInput, setSearchInput] = useState("");   // raw keystroke value
+  const [searchQuery, setSearchQuery] = useState("");   // debounced, drives actual search
   const [searchResults, setSearchResults] = useState<Photo[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchLoadingMore, setSearchLoadingMore] = useState(false);
   const [searchMeta, setSearchMeta] = useState<SearchMeta | null>(null);
   const [searchHasMore, setSearchHasMore] = useState(false);
-  const [searchOffset, setSearchOffset] = useState(0);
-  const searchQueryRef = useRef("");
+  // Refs so loadMoreSearch stays stable (same pattern as useInfinitePhotos)
+  const searchQueryRef   = useRef("");
+  const searchOffsetRef  = useRef(0);
+  const searchHasMoreRef = useRef(false);
+  const searchInFlight   = useRef(false);
 
   // Infinite-scroll photos
   const {
@@ -57,6 +61,12 @@ export default function App() {
     reset: resetPhotos,
     loadMore,
   } = useInfinitePhotos(fetchPhotos, 50);
+
+  // Debounce: update searchQuery 400 ms after the user stops typing
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput), 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const searching = view === "photos" && searchQuery.trim().length > 0;
 
@@ -100,34 +110,68 @@ export default function App() {
     };
   }, [view]);
 
-  // 🔍 Run first-page search when query changes
+  // 🔍 Stable "load more" — uses refs so the callback never changes identity
+  const loadMoreSearch = useCallback(async () => {
+    if (searchInFlight.current || !searchHasMoreRef.current) return;
+    const query = searchQueryRef.current;
+    if (!query) return;
+
+    searchInFlight.current = true;
+    setSearchLoadingMore(true);
+    try {
+      const result = await searchPhotos(query, searchOffsetRef.current);
+      if (searchQueryRef.current !== query) return; // stale — query changed
+      setSearchResults((prev) => [...prev, ...result.photos]);
+      searchOffsetRef.current += result.photos.length;
+      searchHasMoreRef.current = result.hasMore;
+      setSearchHasMore(result.hasMore);
+    } catch { /* ignore */ }
+    finally {
+      searchInFlight.current = false;
+      setSearchLoadingMore(false);
+    }
+  }, []); // intentionally empty — reads all mutable state from refs
+
+  const searchSentinelRef = useIntersectionSentinel({
+    enabled: !!user && searching && searchHasMore && !searchLoading && !searchLoadingMore,
+    onIntersect: loadMoreSearch,
+  });
+
+  // 🔍 Run first-page search when debounced query changes
   useEffect(() => {
     if (!user || !searching) {
+      // Reset everything
+      searchQueryRef.current = "";
+      searchOffsetRef.current = 0;
+      searchHasMoreRef.current = false;
+      searchInFlight.current = false;
       setSearchResults([]);
       setSearchMeta(null);
       setSearchLoading(false);
       setSearchHasMore(false);
-      setSearchOffset(0);
-      searchQueryRef.current = "";
       return;
     }
 
     const query = searchQuery;
+    // Update refs immediately so loadMoreSearch always sees current values
     searchQueryRef.current = query;
-    let cancelled = false;
+    searchOffsetRef.current = 0;
+    searchHasMoreRef.current = false;
+    searchInFlight.current = false;
 
+    let cancelled = false;
     setSearchLoading(true);
     setSearchResults([]);
     setSearchMeta(null);
     setSearchHasMore(false);
-    setSearchOffset(0);
 
     searchPhotos(query, 0)
       .then((result) => {
         if (cancelled || searchQueryRef.current !== query) return;
         setSearchResults(result.photos);
         setSearchMeta(result.meta);
-        setSearchOffset(result.photos.length);
+        searchOffsetRef.current = result.photos.length;
+        searchHasMoreRef.current = result.hasMore;
         setSearchHasMore(result.hasMore);
       })
       .catch(() => {
@@ -141,28 +185,6 @@ export default function App() {
 
     return () => { cancelled = true; };
   }, [searchQuery, searching, user]);
-
-  // 🔍 Load more search results (called by sentinel)
-  const loadMoreSearch = useCallback(async () => {
-    if (searchLoadingMore || !searchHasMore) return;
-    const query = searchQueryRef.current;
-    if (!query) return;
-
-    setSearchLoadingMore(true);
-    try {
-      const result = await searchPhotos(query, searchOffset);
-      if (searchQueryRef.current !== query) return; // stale
-      setSearchResults((prev) => [...prev, ...result.photos]);
-      setSearchOffset((prev) => prev + result.photos.length);
-      setSearchHasMore(result.hasMore);
-    } catch { /* ignore */ }
-    finally { setSearchLoadingMore(false); }
-  }, [searchOffset, searchHasMore, searchLoadingMore]);
-
-  const searchSentinelRef = useIntersectionSentinel({
-    enabled: !!user && searching && searchHasMore && !searchLoading && !searchLoadingMore,
-    onIntersect: loadMoreSearch,
-  });
 
   useEffect(() => {
     if (!user) {
@@ -237,8 +259,8 @@ export default function App() {
           <input
             type="text"
             placeholder='Search "Michigan"'
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
           />
         </div>
@@ -391,6 +413,10 @@ export default function App() {
           if (v !== "person-detail") {
             setActivePerson(null);
             setPersonPhotos([]);
+          }
+          if (v !== "photos") {
+            setSearchInput("");
+            setSearchQuery("");
           }
           setView(v);
         }}
