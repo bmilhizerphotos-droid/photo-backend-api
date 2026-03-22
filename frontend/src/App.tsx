@@ -8,6 +8,7 @@ import {
   Photo,
   Album,
   Person,
+  SearchMeta,
 } from "./api";
 import { useInfinitePhotos } from "./hooks/useInfinitePhotos";
 import { useIntersectionSentinel } from "./hooks/useIntersectionSentinel";
@@ -41,6 +42,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Photo[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchMeta, setSearchMeta] = useState<SearchMeta | null>(null);
 
   // Infinite-scroll photos
   const {
@@ -103,21 +105,25 @@ export default function App() {
     }
     if (!searching) {
       setSearchResults([]);
+      setSearchMeta(null);
       setSearchLoading(false);
       return;
     }
 
     let cancelled = false;
     setSearchLoading(true);
+    setSearchMeta(null);
 
     searchPhotos(searchQuery)
-      .then((photos) => {
+      .then((result) => {
         if (cancelled) return;
-        setSearchResults(photos);
+        setSearchResults(result.photos);
+        setSearchMeta(result.meta);
       })
       .catch(() => {
         if (cancelled) return;
         setSearchResults([]);
+        setSearchMeta(null);
       })
       .finally(() => {
         setSearchLoading((prev) => (cancelled ? prev : false));
@@ -220,13 +226,41 @@ export default function App() {
     if (view === "photos") {
       if (searching) {
         if (searchLoading) {
-          return <div className="text-gray-500">Searching…</div>;
+          return (
+            <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400">
+              <div className="w-8 h-8 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+              <span className="text-sm">Searching with AI…</span>
+            </div>
+          );
         }
+
+        const metaBadges: string[] = [];
+        if (searchMeta?.personName) metaBadges.push(`👤 ${searchMeta.personName}`);
+        if (searchMeta?.dateRange) {
+          const { start, end } = searchMeta.dateRange;
+          metaBadges.push(`📅 ${start.slice(0, 7)} – ${end.slice(0, 7)}`);
+        }
+
         return (
-          <PhotoMasonry
-            photos={searchResults}
-            onPhotoClick={(p) => openPhoto(p)}
-          />
+          <div>
+            <div className="flex items-center gap-3 mb-3 flex-wrap">
+              <span className="text-sm text-gray-500">
+                {searchResults.length} result{searchResults.length !== 1 ? "s" : ""}
+              </span>
+              {metaBadges.map((b) => (
+                <span key={b} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2.5 py-0.5">
+                  {b}
+                </span>
+              ))}
+              {searchResults.length === 0 && (
+                <span className="text-sm text-gray-400">No photos found — try different words</span>
+              )}
+            </div>
+            <PhotoMasonry
+              photos={searchResults}
+              onPhotoClick={(p) => openPhoto(p)}
+            />
+          </div>
         );
       }
 

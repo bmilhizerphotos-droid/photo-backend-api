@@ -294,28 +294,45 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
    SEARCH
    ===================== */
 
-export async function searchPhotos(query: string): Promise<Photo[]> {
+export interface SearchMeta {
+  personName: string | null;
+  dateRange: { start: string; end: string } | null;
+  concepts: string[];
+  sources: { person: number; date: number; fts: number; tags: number; semantic: number };
+}
+
+export interface SearchResult {
+  photos: Photo[];
+  count: number;
+  mode: string;
+  meta: SearchMeta;
+}
+
+export async function searchPhotos(query: string): Promise<SearchResult> {
   const url = API_BASE
     ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}`
     : `/api/search?q=${encodeURIComponent(query)}`;
 
   try {
-    const res = await fetchWithAuth(url);
+    const res = await fetchWithAuth(url, {}, 15000);
     if (!res.ok) {
       throw new Error(`Search failed: ${res.status} ${res.statusText}`);
     }
     const data = await res.json();
     const photos = Array.isArray(data?.photos) ? data.photos : [];
     const token = await getAuthToken();
-    return normalizePhotos(photos, token);
+    return {
+      photos: normalizePhotos(photos, token),
+      count: data?.count ?? photos.length,
+      mode: data?.mode ?? 'unknown',
+      meta: data?.meta ?? { personName: null, dateRange: null, concepts: [], sources: { person: 0, date: 0, fts: 0, tags: 0, semantic: 0 } }
+    };
   } catch (error: any) {
     if (error.name === "AbortError") {
-      console.error("Timeout searching photos");
-      throw new Error("Request timeout - please check your internet connection");
-    } else {
-      console.error("Error searching photos:", error);
+      throw new Error("Search timed out — please try again");
     }
-    return [];
+    console.error("Error searching photos:", error);
+    return { photos: [], count: 0, mode: 'error', meta: { personName: null, dateRange: null, concepts: [], sources: { person: 0, date: 0, fts: 0, tags: 0, semantic: 0 } } };
   }
 }
 
