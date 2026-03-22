@@ -29,6 +29,8 @@ export default function DuplicatesView() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [actionLoading, setActionLoading] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
+  const [pendingDeletes, setPendingDeletes] = useState<Set<number>>(new Set());
+  const [pendingRestores, setPendingRestores] = useState<Set<number>>(new Set());
 
   const loadData = useCallback(async () => {
     try {
@@ -79,6 +81,99 @@ export default function DuplicatesView() {
     }
   }
 
+  function stageDeletePhotoIds(photoIds: number[]) {
+    if (photoIds.length === 0) return;
+    setPendingDeletes((prev) => {
+      const next = new Set(prev);
+      photoIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setPendingRestores((prev) => {
+      const next = new Set(prev);
+      photoIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }
+
+  function stageRestorePhotoIds(photoIds: number[]) {
+    if (photoIds.length === 0) return;
+    setPendingRestores((prev) => {
+      const next = new Set(prev);
+      photoIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setPendingDeletes((prev) => {
+      const next = new Set(prev);
+      photoIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }
+
+  function stageDeleteSelected() {
+    if (selected.size === 0) return;
+    stageDeletePhotoIds(Array.from(selected));
+  }
+
+  function stageRestoreSelected() {
+    if (selected.size === 0) return;
+    stageRestorePhotoIds(Array.from(selected));
+  }
+
+  async function applyPendingChanges() {
+    setConfirmDialog(null);
+    if (pendingDeletes.size === 0 && pendingRestores.size === 0) return;
+    setActionLoading(true);
+    try {
+      if (pendingRestores.size > 0) {
+        await restorePhotos(Array.from(pendingRestores));
+      }
+      if (pendingDeletes.size > 0) {
+        await softDeletePhotos(Array.from(pendingDeletes));
+      }
+      setPendingDeletes(new Set());
+      setPendingRestores(new Set());
+      setSelected(new Set());
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Apply failed');
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  function handleApplyPending() {
+    const total = pendingDeletes.size + pendingRestores.size;
+    if (total === 0) return;
+    setConfirmDialog({
+      message: `Apply ${pendingDeletes.size} deletions and ${pendingRestores.size} restores? Photos will only be hidden from the UI and can be brought back later.`,
+      onConfirm: applyPendingChanges,
+    });
+  }
+
+  function handleFeelingLucky() {
+    const groupsForTab = tab === 'duplicates' ? duplicates : bursts;
+    const toDelete: number[] = [];
+    groupsForTab.forEach((group) => {
+      const candidates = group.photos.filter((p) => !p.isDeleted);
+      if (candidates.length <= 1) return;
+      let best = candidates[0];
+      let bestScore = (best.width || 0) * (best.height || 0);
+      candidates.forEach((photo) => {
+        const score = (photo.width || 0) * (photo.height || 0);
+        if (score > bestScore) {
+          best = photo;
+          bestScore = score;
+        }
+      });
+      candidates
+        .filter((photo) => photo.id !== best.id)
+        .forEach((photo) => toDelete.push(photo.id));
+    });
+    if (toDelete.length > 0) {
+      stageDeletePhotoIds(toDelete);
+    }
+  }
+
   function toggleSelect(photoId: number) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -88,66 +183,22 @@ export default function DuplicatesView() {
     });
   }
 
-  async function handleDeleteSelected() {
+  function stageDeleteSelected() {
     if (selected.size === 0) return;
-    setConfirmDialog({
-      message: `Soft-delete ${selected.size} photo${selected.size > 1 ? 's' : ''}? They can be restored later.`,
-      onConfirm: async () => {
-        setConfirmDialog(null);
-        setActionLoading(true);
-        try {
-          await softDeletePhotos(Array.from(selected));
-          setSelected(new Set());
-          await loadData();
-        } catch (err) {
-          setError(err instanceof Error ? err.message : 'Delete failed');
-        } finally {
-          setActionLoading(false);
-        }
-      },
-    });
+    stageDeletePhotoIds(Array.from(selected));
   }
 
-  async function handleKeepThisOne(group: DuplicateGroup, keepId: number) {
+  function handleKeepThisOne(group: DuplicateGroup, keepId: number) {
     const toDelete = group.photos.filter(p => p.id !== keepId && !p.isDeleted).map(p => p.id);
-    if (toDelete.length === 0) return;
-    setConfirmDialog({
-      message: `Keep "${group.photos.find(p => p.id === keepId)?.filename}" and soft-delete the other ${toDelete.length} photo${toDelete.length > 1 ? 's' : ''}?`,
-      onConfirm: async () => {
-        setConfirmDialog(null);
-        setActionLoading(true);
-        try {
-          await softDeletePhotos(toDelete);
-          setSelected(prev => {
-            const next = new Set(prev);
-            for (const id of toDelete) next.delete(id);
-            return next;
-          });
-          await loadData();
-        } catch (err) {
-          setError(err instanceof Error ? err.message : 'Delete failed');
-        } finally {
-          setActionLoading(false);
-        }
-      },
-    });
+    stageDeletePhotoIds(toDelete);
   }
 
-  async function handleRestoreGroup(group: DuplicateGroup) {
+  function handleRestoreGroup(group: DuplicateGroup) {
     const toRestore = group.photos.filter(p => p.isDeleted).map(p => p.id);
-    if (toRestore.length === 0) return;
-    setActionLoading(true);
-    try {
-      await restorePhotos(toRestore);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Restore failed');
-    } finally {
-      setActionLoading(false);
-    }
+    stageRestorePhotoIds(toRestore);
   }
 
-  async function handleRestoreSelected() {
+  function handleRestoreSelected() {
     const selectedDeleted = Array.from(selected).filter(id => {
       const groups = tab === 'duplicates' ? duplicates : bursts;
       for (const g of groups) {
@@ -157,20 +208,7 @@ export default function DuplicatesView() {
       return false;
     });
     if (selectedDeleted.length === 0) return;
-    setActionLoading(true);
-    try {
-      await restorePhotos(selectedDeleted);
-      setSelected(prev => {
-        const next = new Set(prev);
-        for (const id of selectedDeleted) next.delete(id);
-        return next;
-      });
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Restore failed');
-    } finally {
-      setActionLoading(false);
-    }
+    stageRestorePhotoIds(selectedDeleted);
   }
 
   if (loading) {
@@ -299,30 +337,56 @@ export default function DuplicatesView() {
       {selectedCount > 0 && (
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3 flex-wrap">
           <span className="text-sm font-medium text-blue-800">{selectedCount} selected</span>
-          {hasActiveInSelection && (
-            <button
-              onClick={handleDeleteSelected}
-              disabled={actionLoading}
-              className="px-3 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 disabled:opacity-50"
-            >
-              Delete Selected
-            </button>
-          )}
-          {hasDeletedInSelection && (
-            <button
-              onClick={handleRestoreSelected}
-              disabled={actionLoading}
-              className="px-3 py-1.5 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 disabled:opacity-50"
-            >
-              Restore Selected
-            </button>
-          )}
+          <button
+            onClick={stageDeleteSelected}
+            disabled={!hasActiveInSelection || actionLoading}
+            className="px-3 py-1.5 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 disabled:opacity-50"
+          >
+            Stage Delete
+          </button>
+          <button
+            onClick={stageRestoreSelected}
+            disabled={!hasDeletedInSelection || actionLoading}
+            className="px-3 py-1.5 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 disabled:opacity-50"
+          >
+            Stage Restore
+          </button>
+          <button
+            onClick={handleFeelingLucky}
+            disabled={groups.length === 0 || actionLoading}
+            className="px-3 py-1.5 bg-purple-500 text-white text-sm rounded-lg hover:bg-purple-600 disabled:opacity-50"
+          >
+            Feeling lucky
+          </button>
           <button
             onClick={() => setSelected(new Set())}
             className="px-3 py-1.5 text-gray-600 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
           >
             Clear Selection
           </button>
+        </div>
+      )}
+      {(pendingDeletes.size + pendingRestores.size) > 0 && (
+        <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleApplyPending}
+            disabled={actionLoading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          >
+            Apply staged changes
+          </button>
+          <button
+            onClick={() => {
+              setPendingDeletes(new Set());
+              setPendingRestores(new Set());
+            }}
+            className="px-3 py-1.5 text-gray-600 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
+          >
+            Clear staging
+          </button>
+          <span className="text-xs text-gray-500">
+            Pending: {pendingDeletes.size} delete{pendingDeletes.size !== 1 ? 's' : ''}, {pendingRestores.size} restore{pendingRestores.size !== 1 ? 's' : ''}. Soft deletes only hide photos from the UI.
+          </span>
         </div>
       )}
 
@@ -419,6 +483,13 @@ export default function DuplicatesView() {
                         onToggleSelect={() => toggleSelect(photo.id)}
                         onKeepThisOne={() => handleKeepThisOne(group, photo.id)}
                         actionLoading={actionLoading}
+                        pendingStatus={
+                          pendingDeletes.has(photo.id)
+                            ? 'delete'
+                            : pendingRestores.has(photo.id)
+                              ? 'restore'
+                              : undefined
+                        }
                       />
                     ))}
                   </div>
@@ -440,6 +511,7 @@ function PhotoCard({
   onToggleSelect,
   onKeepThisOne,
   actionLoading,
+  pendingStatus,
 }: {
   photo: DuplicatePhoto;
   idx: number;
@@ -448,6 +520,7 @@ function PhotoCard({
   onToggleSelect: () => void;
   onKeepThisOne: () => void;
   actionLoading: boolean;
+  pendingStatus?: 'delete' | 'restore';
 }) {
   const [hovered, setHovered] = useState(false);
 
@@ -484,6 +557,16 @@ function PhotoCard({
       {photo.width && photo.height && (
         <div className="absolute top-1 right-1 bg-black/50 text-white text-[9px] px-1 rounded">
           {photo.width}x{photo.height}
+        </div>
+      )}
+      {/* Pending action badge */}
+      {pendingStatus && (
+        <div
+          className={`absolute top-8 right-1 text-[9px] font-semibold px-2 py-0.5 rounded ${
+            pendingStatus === 'delete' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'
+          }`}
+        >
+          {pendingStatus === 'delete' ? 'Staged delete' : 'Staged restore'}
         </div>
       )}
       {/* Checkbox */}

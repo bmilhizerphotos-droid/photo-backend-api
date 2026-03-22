@@ -16,8 +16,13 @@ import { PhotoMasonry } from "./components/PhotoMasonry";
 import { PeopleGrid } from "./components/PeopleGrid";
 import Sidebar, { AppView } from "./components/Sidebar";
 import { ImageModal } from "./components/ImageModal";
+import { FaceTagModal } from "./components/FaceTagModal";
+import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
+import DuplicatesView from "./components/DuplicatesView";
+import { useAuth } from "./hooks/useAuth";
 
 export default function App() {
+  const { user, loading: authLoading, error: authError, signIn, signOut } = useAuth();
   const [view, setView] = useState<AppView>("photos");
 
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -28,8 +33,9 @@ export default function App() {
   const [personPhotos, setPersonPhotos] = useState<Photo[]>([]);
   const [personPhotosLoading, setPersonPhotosLoading] = useState(false);
   const [activePerson, setActivePerson] = useState<Person | null>(null);
+  const [selectedPhotoForTagging, setSelectedPhotoForTagging] = useState<Photo | null>(null);
 
-  const [modalImageUrl, setModalImageUrl] = useState<string | null>(null);
+  const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
 
   // 🔍 Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -41,20 +47,26 @@ export default function App() {
     photos,
     hasMore,
     loading: photosLoading,
+    error: photosError,
+    reset: resetPhotos,
     loadMore,
   } = useInfinitePhotos(fetchPhotos, 50);
 
   const searching = view === "photos" && searchQuery.trim().length > 0;
 
   const sentinelRef = useIntersectionSentinel({
-    enabled: view === "photos" && !searching && hasMore && !photosLoading,
+    enabled: !!user && view === "photos" && !searching && hasMore && !photosLoading,
     onIntersect: loadMore,
   });
 
   // Load albums (sidebar) on mount
   useEffect(() => {
+    if (!user) {
+      setAlbums([]);
+      return;
+    }
     fetchAlbums().then(setAlbums).catch(() => setAlbums([]));
-  }, []);
+  }, [user]);
 
   // Load "People" when view is people
   useEffect(() => {
@@ -84,6 +96,11 @@ export default function App() {
 
   // 🔍 Run search when query changes
   useEffect(() => {
+    if (!user) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
     if (!searching) {
       setSearchResults([]);
       setSearchLoading(false);
@@ -109,13 +126,33 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [searchQuery, searching]);
+  }, [searchQuery, searching, user]);
+
+  useEffect(() => {
+    if (!user) {
+    resetPhotos();
+    setPeople([]);
+    setAlbums([]);
+    setPersonPhotos([]);
+    setActivePerson(null);
+    setModalPhoto(null);
+    setSelectedPhotoForTagging(null);
+      return;
+    }
+
+    resetPhotos();
+    loadMore();
+  }, [user, resetPhotos, loadMore]);
 
   const openPhoto = useCallback((p: Photo) => {
     const url = (p as any)?.image_url;
     if (typeof url === "string" && url.length > 0) {
-      setModalImageUrl(url);
+      setModalPhoto({ ...p, image_url: url });
     }
+  }, []);
+
+  const openPhotoTagEditor = useCallback((p: Photo) => {
+    setSelectedPhotoForTagging(p);
   }, []);
 
   const loadPerson = useCallback(async (person: Person) => {
@@ -211,9 +248,22 @@ export default function App() {
         <PeopleGrid
           people={people}
           onPersonClick={loadPerson}
+          onUnidentifiedClick={() => setView("unidentified")}
           loading={peopleLoading}
         />
       );
+    }
+
+    if (view === "unidentified") {
+      return (
+        <UnidentifiedFaces
+          onBack={() => setView("people")}
+        />
+      );
+    }
+
+    if (view === "duplicates") {
+      return <DuplicatesView />;
     }
 
     if (view === "person-detail" && activePerson) {
@@ -223,13 +273,45 @@ export default function App() {
       return (
         <PhotoMasonry
           photos={personPhotos}
-          onPhotoClick={(p) => openPhoto(p)}
+          onPhotoClick={(p) => openPhotoTagEditor(p)}
         />
       );
     }
 
     return <div className="text-gray-400">Select a view</div>;
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
+          <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
+          <p className="mt-3 text-sm text-gray-600">Checking your sign-in status...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
+          <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
+          <p className="mt-3 text-sm text-gray-600">
+            Sign in with Google to load your protected photo library.
+          </p>
+          {authError && <p className="mt-4 text-sm text-red-600">{authError}</p>}
+          <button
+            type="button"
+            onClick={() => void signIn()}
+            className="mt-6 inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Sign In With Google
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -249,14 +331,41 @@ export default function App() {
       />
 
       <main className="flex-1 p-4 overflow-y-auto">
+        <div className="mb-4 flex items-center justify-end gap-3">
+          <div className="text-sm text-gray-500">{user.email}</div>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+          >
+            Sign Out
+          </button>
+        </div>
         {header}
+        {photosError && view === "photos" && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {photosError}
+          </div>
+        )}
         {renderView()}
       </main>
 
-      <ImageModal
-        imageUrl={modalImageUrl}
-        onClose={() => setModalImageUrl(null)}
-      />
+        <ImageModal
+          photo={modalPhoto}
+          onClose={() => setModalPhoto(null)}
+        />
+      {selectedPhotoForTagging && (
+        <FaceTagModal
+          photo={selectedPhotoForTagging}
+          imageUrl={(selectedPhotoForTagging as any).image_url || (selectedPhotoForTagging as any).fullUrl}
+          onClose={() => setSelectedPhotoForTagging(null)}
+          onUpdate={() => {
+            if (activePerson) {
+              void loadPerson(activePerson);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -21,7 +21,7 @@ export function UnidentifiedFaces({ onBack }: UnidentifiedFacesProps) {
     try {
       const currentOffset = resetOffset ? 0 : offset;
       const data = await fetchUnidentifiedPhotos(currentOffset, limit);
-      setPhotos(data.photos);
+      setPhotos(prev => (resetOffset || currentOffset === 0 ? data.photos : [...prev, ...data.photos]));
       setTotal(data.total);
       if (resetOffset) setOffset(0);
     } catch (err) {

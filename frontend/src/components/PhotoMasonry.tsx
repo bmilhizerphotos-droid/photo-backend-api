@@ -26,69 +26,27 @@ export function PhotoMasonry({
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   }, []);
 
-  // Best-effort API base (supports a couple common Vite env names).
-  // If no env is present, use relative /api which works with Vite proxy in dev.
-  const apiBase = React.useMemo(() => {
-    const env = (import.meta as any)?.env ?? {};
-    const base =
-      env.VITE_API_BASE_URL ??
-      env.VITE_API_BASE ??
-      env.VITE_API_URL ??
-      env.VITE_BACKEND_URL ??
-      "";
-    return typeof base === "string" ? base.replace(/\/+$/, "") : "";
-  }, []);
-
   const resolveThumbnailSrc = React.useCallback(
     (p: Photo) => {
-      const anyP = p as unknown as {
-        id?: unknown;
-        filename?: unknown;
-        thumbnailUrl?: unknown;
-        thumbnail_url?: unknown;
-      };
+      const anyP = p as any;
 
-      // 1) Prefer explicitly provided thumbnail URLs
-      const candidates = [anyP.thumbnailUrl, anyP.thumbnail_url];
-      for (const v of candidates) {
-        if (typeof v === "string" && v.trim().length > 0) return v.trim();
+      // Prefer explicit thumbnail URL from API
+      if (typeof anyP.thumbnail_url === "string" && anyP.thumbnail_url.length > 0) {
+        return anyP.thumbnail_url;
+      }
+      if (typeof anyP.thumbnailUrl === "string" && anyP.thumbnailUrl.length > 0) {
+        return anyP.thumbnailUrl;
       }
 
-      // 2) If we have an id, construct a known thumbnail endpoint
-      const id = anyP.id;
-      if (typeof id === "number" && Number.isFinite(id)) {
-        const path = `/api/photos/${id}/thumbnail`;
-        return apiBase ? `${apiBase}${path}` : path;
+      // Fallback: ALWAYS relative path (Vite proxy in dev, same-origin in prod)
+      if (typeof anyP.id === "number") {
+        return `/thumbnails/${anyP.id}`;
       }
 
-      // 3) Last resort placeholder (still a valid src)
       return PLACEHOLDER_SRC;
     },
-    [PLACEHOLDER_SRC, apiBase]
+    [PLACEHOLDER_SRC]
   );
-
-  // Defensive logging: when photos are received/updated in this component
-  const lastLoggedCountRef = React.useRef<number | null>(null);
-  React.useEffect(() => {
-    if (lastLoggedCountRef.current === photos.length) return;
-    lastLoggedCountRef.current = photos.length;
-
-    const sample = photos[0]
-      ? {
-          id: (photos[0] as any).id,
-          filename: (photos[0] as any).filename,
-          thumbnailUrl: (photos[0] as any).thumbnailUrl,
-          thumbnail_url: (photos[0] as any).thumbnail_url,
-          resolved: resolveThumbnailSrc(photos[0]),
-        }
-      : null;
-
-    // eslint-disable-next-line no-console
-    console.info("[PhotoMasonry] photos loaded", { count: photos.length, apiBase, sample });
-  }, [photos, apiBase, resolveThumbnailSrc]);
-
-  // Log resolved thumbnail URL once per photo id to avoid noisy spam
-  const loggedPhotoIdsRef = React.useRef<Set<number>>(new Set());
 
   return (
     <div className="w-full max-w-none">
@@ -101,22 +59,7 @@ export function PhotoMasonry({
         {photos.map((p) => {
           const isSelected = selectedIds.has(p.id);
           const isFavorite = p.isFavorite;
-
           const thumbnailSrc = resolveThumbnailSrc(p);
-
-          if (!loggedPhotoIdsRef.current.has(p.id)) {
-            loggedPhotoIdsRef.current.add(p.id);
-            // eslint-disable-next-line no-console
-            console.info("[PhotoMasonry] resolved thumbnail", {
-              id: p.id,
-              filename: p.filename,
-              src: thumbnailSrc,
-              raw: {
-                thumbnailUrl: (p as any).thumbnailUrl,
-                thumbnail_url: (p as any).thumbnail_url,
-              },
-            });
-          }
 
           return (
             <div key={String(p.id)} className="mb-2 break-inside-avoid relative group">
