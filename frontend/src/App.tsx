@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchPhotos,
   fetchAlbums,
@@ -42,7 +42,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Photo[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
   const [searchMeta, setSearchMeta] = useState<SearchMeta | null>(null);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const searchQueryRef = useRef("");
 
   // Infinite-scroll photos
   const {
@@ -96,43 +100,69 @@ export default function App() {
     };
   }, [view]);
 
-  // 🔍 Run search when query changes
+  // 🔍 Run first-page search when query changes
   useEffect(() => {
-    if (!user) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
-    if (!searching) {
+    if (!user || !searching) {
       setSearchResults([]);
       setSearchMeta(null);
       setSearchLoading(false);
+      setSearchHasMore(false);
+      setSearchOffset(0);
+      searchQueryRef.current = "";
       return;
     }
 
+    const query = searchQuery;
+    searchQueryRef.current = query;
     let cancelled = false;
-    setSearchLoading(true);
-    setSearchMeta(null);
 
-    searchPhotos(searchQuery)
+    setSearchLoading(true);
+    setSearchResults([]);
+    setSearchMeta(null);
+    setSearchHasMore(false);
+    setSearchOffset(0);
+
+    searchPhotos(query, 0)
       .then((result) => {
-        if (cancelled) return;
+        if (cancelled || searchQueryRef.current !== query) return;
         setSearchResults(result.photos);
         setSearchMeta(result.meta);
+        setSearchOffset(result.photos.length);
+        setSearchHasMore(result.hasMore);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (cancelled || searchQueryRef.current !== query) return;
         setSearchResults([]);
         setSearchMeta(null);
       })
       .finally(() => {
-        setSearchLoading((prev) => (cancelled ? prev : false));
+        if (!cancelled) setSearchLoading(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [searchQuery, searching, user]);
+
+  // 🔍 Load more search results (called by sentinel)
+  const loadMoreSearch = useCallback(async () => {
+    if (searchLoadingMore || !searchHasMore) return;
+    const query = searchQueryRef.current;
+    if (!query) return;
+
+    setSearchLoadingMore(true);
+    try {
+      const result = await searchPhotos(query, searchOffset);
+      if (searchQueryRef.current !== query) return; // stale
+      setSearchResults((prev) => [...prev, ...result.photos]);
+      setSearchOffset((prev) => prev + result.photos.length);
+      setSearchHasMore(result.hasMore);
+    } catch { /* ignore */ }
+    finally { setSearchLoadingMore(false); }
+  }, [searchOffset, searchHasMore, searchLoadingMore]);
+
+  const searchSentinelRef = useIntersectionSentinel({
+    enabled: !!user && searching && searchHasMore && !searchLoading && !searchLoadingMore,
+    onIntersect: loadMoreSearch,
+  });
 
   useEffect(() => {
     if (!user) {
@@ -245,7 +275,7 @@ export default function App() {
           <div>
             <div className="flex items-center gap-3 mb-3 flex-wrap">
               <span className="text-sm text-gray-500">
-                {searchResults.length} result{searchResults.length !== 1 ? "s" : ""}
+                {searchResults.length}{searchHasMore ? "+" : ""} result{searchResults.length !== 1 ? "s" : ""}
               </span>
               {metaBadges.map((b) => (
                 <span key={b} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2.5 py-0.5">
@@ -260,6 +290,13 @@ export default function App() {
               photos={searchResults}
               onPhotoClick={(p) => openPhoto(p)}
             />
+            {/* Infinite scroll sentinel for search */}
+            <div ref={searchSentinelRef} className="h-10" />
+            {searchLoadingMore && (
+              <div className="flex justify-center py-4">
+                <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            )}
           </div>
         );
       }

@@ -616,6 +616,27 @@ function parseDateFromQuery(query) {
   return null;
 }
 
+// ---- Local person-name lookup (no Gemini needed) ----
+// Returns the best-matching person name from the DB for the given raw query,
+// or null if nothing matches.
+async function lookupPersonInDb(query) {
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  if (!words.length) return null;
+  try {
+    const people = await dbAll('SELECT name FROM people');
+    // Score each person: count how many query words appear in their name
+    let best = null, bestScore = 0;
+    for (const { name } of people) {
+      const lname = name.toLowerCase();
+      let score = 0;
+      for (const w of words) if (lname.includes(w)) score++;
+      if (score > bestScore) { bestScore = score; best = name; }
+    }
+    // Require at least one matching word
+    return bestScore > 0 ? best : null;
+  } catch { return null; }
+}
+
 // ---- Search sources ----
 async function searchFTS(terms, limit) {
   if (!terms || terms.length === 0) return [];
@@ -736,37 +757,43 @@ function mergeResults(sources, limit) {
 app.get("/api/search", authenticateToken, async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim();
-    const limit = Math.min(200, parseIntOrDefault(req.query.limit, 100));
+    const limit  = Math.min(100, parseIntOrDefault(req.query.limit, 50));
+    const offset = Math.max(0,   parseIntOrDefault(req.query.offset, 0));
+    // Fetch enough rows from each source to cover the requested page + 1 (to detect hasMore)
+    const innerLimit = offset + limit + 1;
+
     const protocol = req.get("x-forwarded-proto") || req.protocol;
     const host = req.get("x-forwarded-host") || req.get("host");
     const base = `${protocol}://${host}`;
 
-    if (!q) return res.json({ query: q, mode: 'empty', photos: [], meta: {} });
+    if (!q) return res.json({ query: q, mode: 'empty', photos: [], count: 0, offset, limit, hasMore: false, meta: {} });
 
-    // Gemini expansion and local date parsing in parallel
-    const [gemini, localDateRange] = await Promise.all([
+    // Gemini expansion, local date parsing, and DB person lookup in parallel
+    const [gemini, localDateRange, dbPerson] = await Promise.all([
       expandQueryWithGemini(q),
-      Promise.resolve(parseDateFromQuery(q))
+      Promise.resolve(parseDateFromQuery(q)),
+      lookupPersonInDb(q)
     ]);
 
     const concepts   = gemini?.concepts?.length ? gemini.concepts  : [q];
     const tagTerms   = gemini?.tagTerms?.length ? gemini.tagTerms  : concepts.slice(0, 4);
-    const personName = gemini?.personName        || null;
+    const personName = gemini?.personName        || dbPerson || null;
     const dateRange  = gemini?.dateRange         || localDateRange;
     const allTerms   = [...new Set([q, ...concepts])];
+    console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} date:${JSON.stringify(dateRange)} concepts:${concepts.slice(0,3).join(',')}`);
 
-    // All sources in parallel
+    // All sources in parallel — fetch innerLimit so pagination works
     const [ftsRows, personRows, tagRows, dateRows] = await Promise.all([
-      searchFTS(allTerms, limit),
-      personName ? searchByPerson(personName, limit) : Promise.resolve([]),
-      searchByTags(tagTerms, limit),
-      dateRange  ? searchByDateRange(dateRange, limit) : Promise.resolve([])
+      searchFTS(allTerms, innerLimit),
+      personName ? searchByPerson(personName, innerLimit) : Promise.resolve([]),
+      searchByTags(tagTerms, innerLimit),
+      dateRange  ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([])
     ]);
 
     // Semantic search — optional
     let semanticRows = [];
     try {
-      const payload = await runSemanticSearch(q, limit);
+      const payload = await runSemanticSearch(q, innerLimit);
       const ids = (payload.results || []).map(r => r.photo_id);
       if (ids.length > 0) {
         const ph = ids.map(() => '?').join(',');
@@ -776,10 +803,13 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       }
     } catch { /* optional */ }
 
-    // Merge: person > date > fts > tags > semantic
-    const combined = mergeResults([personRows, dateRows, ftsRows, tagRows, semanticRows], limit);
-    const peopleRows = await fetchPeopleForPhotoIds(combined.map(r => r.id));
-    const photos = buildPhotoResponse(combined, peopleRows, base);
+    // Merge: person > date > fts > tags > semantic, then slice to requested page
+    const combined = mergeResults([personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
+    const hasMore   = combined.length > offset + limit;
+    const page      = combined.slice(offset, offset + limit);
+
+    const peopleRows = await fetchPeopleForPhotoIds(page.map(r => r.id));
+    const photos = buildPhotoResponse(page, peopleRows, base);
 
     const sources = [];
     if (personRows.length > 0)    sources.push('person');
@@ -792,6 +822,9 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       query: q,
       mode: sources.join('+') || 'no-results',
       count: photos.length,
+      offset,
+      limit,
+      hasMore,
       photos,
       meta: { personName, dateRange, concepts, sources: { person: personRows.length, date: dateRows.length, fts: ftsRows.length, tags: tagRows.length, semantic: semanticRows.length } }
     });

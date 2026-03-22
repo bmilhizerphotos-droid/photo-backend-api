@@ -304,14 +304,17 @@ export interface SearchMeta {
 export interface SearchResult {
   photos: Photo[];
   count: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
   mode: string;
   meta: SearchMeta;
 }
 
-export async function searchPhotos(query: string): Promise<SearchResult> {
+export async function searchPhotos(query: string, offset = 0, limit = 50): Promise<SearchResult> {
   const url = API_BASE
-    ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}`
-    : `/api/search?q=${encodeURIComponent(query)}`;
+    ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}&offset=${offset}&limit=${limit}`
+    : `/api/search?q=${encodeURIComponent(query)}&offset=${offset}&limit=${limit}`;
 
   try {
     const res = await fetchWithAuth(url, {}, 15000);
@@ -324,6 +327,9 @@ export async function searchPhotos(query: string): Promise<SearchResult> {
     return {
       photos: normalizePhotos(photos, token),
       count: data?.count ?? photos.length,
+      offset: data?.offset ?? offset,
+      limit: data?.limit ?? limit,
+      hasMore: data?.hasMore ?? false,
       mode: data?.mode ?? 'unknown',
       meta: data?.meta ?? { personName: null, dateRange: null, concepts: [], sources: { person: 0, date: 0, fts: 0, tags: 0, semantic: 0 } }
     };
@@ -332,7 +338,7 @@ export async function searchPhotos(query: string): Promise<SearchResult> {
       throw new Error("Search timed out — please try again");
     }
     console.error("Error searching photos:", error);
-    return { photos: [], count: 0, mode: 'error', meta: { personName: null, dateRange: null, concepts: [], sources: { person: 0, date: 0, fts: 0, tags: 0, semantic: 0 } } };
+    return { photos: [], count: 0, offset, limit, hasMore: false, mode: 'error', meta: { personName: null, dateRange: null, concepts: [], sources: { person: 0, date: 0, fts: 0, tags: 0, semantic: 0 } } };
   }
 }
 
