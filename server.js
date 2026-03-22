@@ -25,6 +25,7 @@ admin.initializeApp({
 const app = express();
 const PORT = process.env.PORT || 3001;
 const PHOTO_ROOT = process.env.PHOTO_ROOT || "G:/Photos";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 let duplicateScanRunning = false;
 
 const allowedOrigins = [
@@ -622,11 +623,12 @@ async function searchFTS(terms, limit) {
   if (!sanitized.length) return [];
   const ftsQuery = sanitized.map(t => '"' + t + '"').join(' OR ');
   try {
+    // Note: SQLite FTS5 requires the real table name in MATCH, not an alias
     return await dbAll(
       `SELECT p.id, p.filename, p.created_at, p.date_taken, p.thumbnail_path, p.full_path
-       FROM photo_search_fts f
-       JOIN photos p ON p.id = f.rowid
-       WHERE f MATCH ?
+       FROM photo_search_fts
+       JOIN photos p ON p.id = photo_search_fts.rowid
+       WHERE photo_search_fts MATCH ?
        ORDER BY rank
        LIMIT ?`,
       [ftsQuery, limit]
