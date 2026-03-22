@@ -198,13 +198,12 @@ export default function App() {
     if (view === "photos") {
       return (
         <div className="mb-4">
-          <div className="text-xl font-semibold mb-2">Photos</div>
           <input
             type="text"
-            placeholder="Search photos (e.g. dog, beach, birthday)"
+            placeholder='Search "Michigan"'
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full max-w-md px-3 py-2 border rounded-md text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
           />
         </div>
       );
@@ -237,7 +236,7 @@ export default function App() {
 
       return (
         <>
-          <PhotoMasonry photos={photos} onPhotoClick={(p) => openPhoto(p)} />
+          <PhotoMasonry photos={photos} onPhotoClick={(p) => openPhoto(p)} groupByDate />
           <div ref={sentinelRef} className="h-10" />
         </>
       );

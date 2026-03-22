@@ -192,11 +192,12 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
         p.filename,
         p.is_favorite,
         p.created_at,
+        p.date_taken,
         GROUP_CONCAT(pa.album_id) as album_ids
       FROM photos p
       LEFT JOIN photo_albums pa ON p.id = pa.photo_id
       GROUP BY p.id
-      ORDER BY p.id
+      ORDER BY COALESCE(p.date_taken, p.created_at) DESC, p.id DESC
       LIMIT ? OFFSET ?
     `,
       [limit, offset]
@@ -207,10 +208,11 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
         id: r.id,
         filename: r.filename,
         thumbnailUrl: `/thumbnails/${r.id}`,
-        fullUrl: `/thumbnails/${r.id}?full=true`, // Use thumbnails endpoint with full=true
+        fullUrl: `/thumbnails/${r.id}?full=true`,
         isFavorite: Boolean(r.is_favorite),
         albumIds: r.album_ids ? r.album_ids.split(",").filter(Boolean).map(Number) : [],
         createdAt: r.created_at,
+        dateTaken: r.date_taken ?? null,
       }))
     );
   } catch (err) {
