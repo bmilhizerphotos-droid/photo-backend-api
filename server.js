@@ -197,6 +197,7 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
         GROUP_CONCAT(pa.album_id) as album_ids
       FROM photos p
       LEFT JOIN photo_albums pa ON p.id = pa.photo_id
+      WHERE p.is_deleted = 0
       GROUP BY p.id
       ORDER BY COALESCE(p.date_taken, p.created_at) DESC, p.id DESC
       LIMIT ? OFFSET ?
@@ -1162,6 +1163,62 @@ app.post("/api/photos/restore", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("POST /api/photos/restore error:", err);
     res.status(500).json({ error: "Failed to restore photos" });
+  }
+});
+
+// ---------------- TRASH (soft-deleted photos) ----------------
+app.get("/api/photos/trash", authenticateToken, async (req, res) => {
+  try {
+    const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+
+    const [rows, countRow] = await Promise.all([
+      dbAll(
+        `SELECT id, filename, date_taken, created_at
+         FROM photos
+         WHERE is_deleted = 1
+         ORDER BY COALESCE(date_taken, created_at) DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [limit, offset]
+      ),
+      dbGet("SELECT COUNT(*) as total FROM photos WHERE is_deleted = 1"),
+    ]);
+
+    const total = countRow?.total ?? 0;
+    const photos = rows.map((r) => ({
+      id: r.id,
+      filename: r.filename,
+      thumbnailUrl: `/thumbnails/${r.id}`,
+      dateTaken: r.date_taken ?? null,
+      createdAt: r.created_at,
+    }));
+
+    res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total });
+  } catch (err) {
+    console.error("GET /api/photos/trash error:", err);
+    res.status(500).json({ error: "Failed to fetch trash" });
+  }
+});
+
+// Permanently delete (remove DB row + optionally file) — does NOT touch filesystem for now
+app.delete("/api/photos/trash", authenticateToken, async (req, res) => {
+  try {
+    const { photoIds } = req.body ?? {};
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({ error: "photoIds must be a non-empty array" });
+    }
+    const ids = photoIds.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) return res.status(400).json({ error: "No valid photoIds" });
+
+    const placeholders = ids.map(() => "?").join(",");
+    const result = await dbRun(
+      `DELETE FROM photos WHERE id IN (${placeholders}) AND is_deleted = 1`,
+      ids
+    );
+    res.json({ deleted: Number(result?.changes || 0) });
+  } catch (err) {
+    console.error("DELETE /api/photos/trash error:", err);
+    res.status(500).json({ error: "Failed to permanently delete" });
   }
 });
 

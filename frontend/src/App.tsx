@@ -20,6 +20,7 @@ import { ImageModal } from "./components/ImageModal";
 import { FaceTagModal } from "./components/FaceTagModal";
 import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
 import DuplicatesView from "./components/DuplicatesView";
+import TrashView from "./components/TrashView";
 import { useAuth } from "./hooks/useAuth";
 
 export default function App() {
@@ -398,8 +399,9 @@ export default function App() {
       "recently-added":{ emoji: "🕐", title: "Recently added",          desc: "Photos added in the last 30 days." },
       shared:          { emoji: "🔗", title: "Shared",                  desc: "Photos shared with or by you will appear here." },
       import:          { emoji: "➕", title: "Add photos",              desc: "Import new photos into your library." },
-      trash:           { emoji: "🗑️", title: "Trash",                   desc: "Deleted photos are kept here for 60 days before permanent removal." },
     };
+
+    if (view === "trash") return <TrashView user={user} />;
 
     const placeholder = placeholders[view];
     if (placeholder) {

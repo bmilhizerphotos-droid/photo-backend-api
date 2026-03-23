@@ -607,3 +607,50 @@ export async function restorePhotos(photoIds: number[]): Promise<void> {
     throw new Error(error.error || `Failed to restore photos: ${res.status}`);
   }
 }
+
+export interface TrashPhoto {
+  id: number;
+  filename: string;
+  thumbnailUrl: string;
+  dateTaken: string | null;
+  createdAt: string;
+}
+
+export async function fetchTrash(offset = 0, limit = 50): Promise<{
+  photos: TrashPhoto[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/trash?offset=${offset}&limit=${limit}`
+    : `/api/photos/trash?offset=${offset}&limit=${limit}`;
+
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch trash: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  const photos: TrashPhoto[] = (data.photos ?? []).map((p: TrashPhoto) => ({
+    ...p,
+    thumbnailUrl: buildUrl(p.thumbnailUrl, token),
+  }));
+  return { ...data, photos };
+}
+
+export async function permanentlyDeletePhotos(photoIds: number[]): Promise<{ deleted: number }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/trash`
+    : `/api/photos/trash`;
+
+  const res = await fetchWithAuth(url, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ photoIds }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to permanently delete: ${res.status}`);
+  }
+  return res.json();
+}
