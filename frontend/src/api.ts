@@ -487,8 +487,14 @@ export async function fetchDuplicateStats(): Promise<DuplicateStats> {
   return res.json();
 }
 
-async function fetchDuplicateGroups(pathname: string): Promise<DuplicateGroup[]> {
-  const url = API_BASE ? `${API_BASE}${pathname}` : pathname;
+async function fetchDuplicateGroups(
+  pathname: string,
+  offset = 0,
+  limit = 25
+): Promise<{ groups: DuplicateGroup[]; hasMore: boolean }> {
+  const sep = pathname.includes("?") ? "&" : "?";
+  const full = `${pathname}${sep}offset=${offset}&limit=${limit}`;
+  const url = API_BASE ? `${API_BASE}${full}` : full;
   const res = await fetchWithAuth(url, {}, 60000);
 
   if (!res.ok) {
@@ -497,9 +503,10 @@ async function fetchDuplicateGroups(pathname: string): Promise<DuplicateGroup[]>
 
   const data = await res.json();
   const token = await getAuthToken();
-  const groups = Array.isArray(data) ? data : [];
+  const raw = Array.isArray(data) ? data : (data?.groups ?? []);
+  const hasMore: boolean = data?.hasMore ?? false;
 
-  return groups.map((group: any) => ({
+  const groups = raw.map((group: any) => ({
     groupId: Number(group.groupId),
     count: Number(group.count || 0),
     photos: (Array.isArray(group.photos) ? group.photos : []).map((photo: any) => ({
@@ -513,14 +520,22 @@ async function fetchDuplicateGroups(pathname: string): Promise<DuplicateGroup[]>
       isDeleted: Boolean(photo.isDeleted),
     })),
   }));
+
+  return { groups, hasMore };
 }
 
-export async function fetchDuplicates(): Promise<DuplicateGroup[]> {
-  return fetchDuplicateGroups("/api/photos/duplicates");
+export async function fetchDuplicates(
+  offset = 0,
+  limit = 25
+): Promise<{ groups: DuplicateGroup[]; hasMore: boolean }> {
+  return fetchDuplicateGroups("/api/photos/duplicates", offset, limit);
 }
 
-export async function fetchBursts(): Promise<DuplicateGroup[]> {
-  return fetchDuplicateGroups("/api/photos/bursts");
+export async function fetchBursts(
+  offset = 0,
+  limit = 25
+): Promise<{ groups: DuplicateGroup[]; hasMore: boolean }> {
+  return fetchDuplicateGroups("/api/photos/bursts", offset, limit);
 }
 
 export async function startDuplicateScan(): Promise<{ started: boolean; message: string }> {

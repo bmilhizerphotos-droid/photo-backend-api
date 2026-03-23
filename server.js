@@ -946,7 +946,8 @@ app.get("/api/photos/duplicates/stats", authenticateToken, async (_req, res) => 
   }
 });
 
-async function loadGroupPhotos(column, limitCount = 25) {
+async function loadGroupPhotos(column, limitCount = 25, offset = 0) {
+  // Fetch one extra to detect hasMore
   const groups = await dbAll(
     `
     SELECT ${column} as groupId, COUNT(*) as count
@@ -954,14 +955,17 @@ async function loadGroupPhotos(column, limitCount = 25) {
     WHERE ${column} IS NOT NULL
     GROUP BY ${column}
     ORDER BY count DESC
-    LIMIT ?
+    LIMIT ? OFFSET ?
   `,
-    [limitCount]
+    [limitCount + 1, offset]
   );
 
-  if (!groups.length) return [];
+  const hasMore = groups.length > limitCount;
+  const page = groups.slice(0, limitCount);
 
-  const placeholders = groups.map(() => "?").join(",");
+  if (!page.length) return { groups: [], hasMore: false };
+
+  const placeholders = page.map(() => "?").join(",");
   const rows = await dbAll(
     `
     SELECT id, filename, date_taken, width, height, is_deleted, ${column} as groupId
@@ -969,7 +973,7 @@ async function loadGroupPhotos(column, limitCount = 25) {
     WHERE ${column} IN (${placeholders})
     ORDER BY ${column}, date_taken ASC, id ASC
   `,
-    groups.map((g) => g.groupId)
+    page.map((g) => g.groupId)
   );
 
   const groupedRows = rows.reduce((acc, row) => {
@@ -978,27 +982,31 @@ async function loadGroupPhotos(column, limitCount = 25) {
     return acc;
   }, {});
 
-  return groups.map((group) => ({
-    groupId: group.groupId,
-    count: group.count,
-    photos: (groupedRows[group.groupId] || []).map((photo) => ({
-      id: photo.id,
-      filename: photo.filename,
-      dateTaken: photo.date_taken ?? null,
-      width: photo.width ?? null,
-      height: photo.height ?? null,
-      isDeleted: Boolean(photo.is_deleted),
-      thumbnailUrl: `/display/${photo.id}?w=256`,
-      fullUrl: `/display/${photo.id}`,
+  return {
+    hasMore,
+    groups: page.map((group) => ({
+      groupId: group.groupId,
+      count: group.count,
+      photos: (groupedRows[group.groupId] || []).map((photo) => ({
+        id: photo.id,
+        filename: photo.filename,
+        dateTaken: photo.date_taken ?? null,
+        width: photo.width ?? null,
+        height: photo.height ?? null,
+        isDeleted: Boolean(photo.is_deleted),
+        thumbnailUrl: `/display/${photo.id}?w=256`,
+        fullUrl: `/display/${photo.id}`,
+      })),
     })),
-  }));
+  };
 }
 
 app.get("/api/photos/duplicates", authenticateToken, async (req, res) => {
   try {
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
-    const groups = await loadGroupPhotos("duplicate_group_id", limit);
-    res.json(groups);
+    const limit  = Math.min(100, Math.max(1, Number(req.query.limit)  || 25));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const result = await loadGroupPhotos("duplicate_group_id", limit, offset);
+    res.json(result);
   } catch (err) {
     console.error("GET /api/photos/duplicates error:", err);
     res.status(500).json({ error: "Database error" });
@@ -1007,9 +1015,10 @@ app.get("/api/photos/duplicates", authenticateToken, async (req, res) => {
 
 app.get("/api/photos/bursts", authenticateToken, async (req, res) => {
   try {
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
-    const groups = await loadGroupPhotos("burst_id", limit);
-    res.json(groups);
+    const limit  = Math.min(100, Math.max(1, Number(req.query.limit)  || 25));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const result = await loadGroupPhotos("burst_id", limit, offset);
+    res.json(result);
   } catch (err) {
     console.error("GET /api/photos/bursts error:", err);
     res.status(500).json({ error: "Database error" });

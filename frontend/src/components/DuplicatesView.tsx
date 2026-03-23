@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   fetchDuplicateStats,
   fetchDuplicates,
@@ -18,12 +18,17 @@ interface ConfirmDialog {
   onConfirm: () => void;
 }
 
+const PAGE_SIZE = 25;
+
 export default function DuplicatesView() {
   const [stats, setStats] = useState<DuplicateStats | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([]);
   const [bursts, setBursts] = useState<DuplicateGroup[]>([]);
+  const [dupHasMore, setDupHasMore] = useState(false);
+  const [burstHasMore, setBurstHasMore] = useState(false);
   const [tab, setTab] = useState<Tab>('duplicates');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -32,19 +37,38 @@ export default function DuplicatesView() {
   const [pendingDeletes, setPendingDeletes] = useState<Set<number>>(new Set());
   const [pendingRestores, setPendingRestores] = useState<Set<number>>(new Set());
 
+  // Stable refs for infinite scroll
+  const dupOffsetRef   = useRef(0);
+  const burstOffsetRef = useRef(0);
+  const dupHasMoreRef  = useRef(false);
+  const burstHasMoreRef = useRef(false);
+  const inFlightRef    = useRef(false);
+  const tabRef         = useRef<Tab>('duplicates');
+
+  // Keep tabRef in sync
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const [s, d, b] = await Promise.all([
         fetchDuplicateStats(),
-        fetchDuplicates(),
-        fetchBursts(),
+        fetchDuplicates(0, PAGE_SIZE),
+        fetchBursts(0, PAGE_SIZE),
       ]);
       setStats(s);
       setScanning(s.scanning);
-      setDuplicates(d);
-      setBursts(b);
+
+      setDuplicates(d.groups);
+      dupOffsetRef.current = d.groups.length;
+      dupHasMoreRef.current = d.hasMore;
+      setDupHasMore(d.hasMore);
+
+      setBursts(b.groups);
+      burstOffsetRef.current = b.groups.length;
+      burstHasMoreRef.current = b.hasMore;
+      setBurstHasMore(b.hasMore);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
@@ -70,6 +94,52 @@ export default function DuplicatesView() {
     }, 5000);
     return () => clearInterval(interval);
   }, [scanning, loadData]);
+
+  // Stable loadMore — reads state from refs
+  const loadMore = useCallback(async () => {
+    if (inFlightRef.current) return;
+    const isdup = tabRef.current === 'duplicates';
+    if (isdup && !dupHasMoreRef.current) return;
+    if (!isdup && !burstHasMoreRef.current) return;
+
+    inFlightRef.current = true;
+    setLoadingMore(true);
+    try {
+      if (isdup) {
+        const result = await fetchDuplicates(dupOffsetRef.current, PAGE_SIZE);
+        setDuplicates((prev) => [...prev, ...result.groups]);
+        dupOffsetRef.current += result.groups.length;
+        dupHasMoreRef.current = result.hasMore;
+        setDupHasMore(result.hasMore);
+      } else {
+        const result = await fetchBursts(burstOffsetRef.current, PAGE_SIZE);
+        setBursts((prev) => [...prev, ...result.groups]);
+        burstOffsetRef.current += result.groups.length;
+        burstHasMoreRef.current = result.hasMore;
+        setBurstHasMore(result.hasMore);
+      }
+    } catch {}
+    finally {
+      inFlightRef.current = false;
+      setLoadingMore(false);
+    }
+  }, []); // stable
+
+  // Sentinel ref for IntersectionObserver
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const hasMore = tab === 'duplicates' ? dupHasMore : burstHasMore;
+
+  useEffect(() => {
+    if (!hasMore || loading) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) loadMore(); },
+      { rootMargin: '400px' }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasMore, loading, loadMore]);
 
   async function handleScan() {
     try {
@@ -181,11 +251,6 @@ export default function DuplicatesView() {
       else next.add(photoId);
       return next;
     });
-  }
-
-  function stageDeleteSelected() {
-    if (selected.size === 0) return;
-    stageDeletePhotoIds(Array.from(selected));
   }
 
   function handleKeepThisOne(group: DuplicateGroup, keepId: number) {
@@ -399,7 +464,7 @@ export default function DuplicatesView() {
               : 'text-gray-600 hover:text-gray-800'
           }`}
         >
-          Exact Duplicates ({duplicates.length})
+          Exact Duplicates ({stats?.duplicateGroups.toLocaleString() ?? duplicates.length})
         </button>
         <button
           onClick={() => { setTab('bursts'); setSelected(new Set()); }}
@@ -409,7 +474,7 @@ export default function DuplicatesView() {
               : 'text-gray-600 hover:text-gray-800'
           }`}
         >
-          Burst Shots ({bursts.length})
+          Burst Shots ({stats?.burstGroups.toLocaleString() ?? bursts.length})
         </button>
       </div>
 
@@ -430,74 +495,89 @@ export default function DuplicatesView() {
           </p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {groups.map((group) => {
-            const hasDeleted = group.photos.some(p => p.isDeleted);
-            const allDeleted = group.photos.every(p => p.isDeleted);
-            return (
-              <div key={group.groupId} className="bg-white rounded-lg border shadow-sm overflow-hidden">
-                <div className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${
-                      tab === 'duplicates' ? 'bg-red-500' : 'bg-amber-500'
-                    }`}>
-                      {tab === 'duplicates' ? 'Duplicate' : 'Burst'}
-                    </span>
-                    <span className="text-sm text-gray-600">
-                      {group.count} photos
-                    </span>
-                    {hasDeleted && (
-                      <span className="text-xs text-gray-400">
-                        ({group.photos.filter(p => p.isDeleted).length} deleted)
+        <>
+          <div className="space-y-4">
+            {groups.map((group) => {
+              const hasDeleted = group.photos.some(p => p.isDeleted);
+              const allDeleted = group.photos.every(p => p.isDeleted);
+              return (
+                <div key={group.groupId} className="bg-white rounded-lg border shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${
+                        tab === 'duplicates' ? 'bg-red-500' : 'bg-amber-500'
+                      }`}>
+                        {tab === 'duplicates' ? 'Duplicate' : 'Burst'}
                       </span>
-                    )}
+                      <span className="text-sm text-gray-600">
+                        {group.count} photos
+                      </span>
+                      {hasDeleted && (
+                        <span className="text-xs text-gray-400">
+                          ({group.photos.filter(p => p.isDeleted).length} deleted)
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {group.photos[0]?.dateTaken && (
+                        <span className="text-xs text-gray-400">
+                          {new Date(group.photos[0].dateTaken).toLocaleDateString('en-US', {
+                            month: 'short', day: 'numeric', year: 'numeric',
+                          })}
+                        </span>
+                      )}
+                      {hasDeleted && !allDeleted && (
+                        <button
+                          onClick={() => handleRestoreGroup(group)}
+                          disabled={actionLoading}
+                          className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 disabled:opacity-50"
+                        >
+                          Restore All
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {group.photos[0]?.dateTaken && (
-                      <span className="text-xs text-gray-400">
-                        {new Date(group.photos[0].dateTaken).toLocaleDateString('en-US', {
-                          month: 'short', day: 'numeric', year: 'numeric',
-                        })}
-                      </span>
-                    )}
-                    {hasDeleted && !allDeleted && (
-                      <button
-                        onClick={() => handleRestoreGroup(group)}
-                        disabled={actionLoading}
-                        className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 disabled:opacity-50"
-                      >
-                        Restore All
-                      </button>
-                    )}
+                  <div className="p-3">
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {group.photos.map((photo, idx) => (
+                        <PhotoCard
+                          key={photo.id}
+                          photo={photo}
+                          idx={idx}
+                          tab={tab}
+                          isSelected={selected.has(photo.id)}
+                          onToggleSelect={() => toggleSelect(photo.id)}
+                          onKeepThisOne={() => handleKeepThisOne(group, photo.id)}
+                          actionLoading={actionLoading}
+                          pendingStatus={
+                            pendingDeletes.has(photo.id)
+                              ? 'delete'
+                              : pendingRestores.has(photo.id)
+                                ? 'restore'
+                                : undefined
+                          }
+                        />
+                      ))}
+                    </div>
                   </div>
                 </div>
-                <div className="p-3">
-                  <div className="flex gap-2 overflow-x-auto pb-1">
-                    {group.photos.map((photo, idx) => (
-                      <PhotoCard
-                        key={photo.id}
-                        photo={photo}
-                        idx={idx}
-                        tab={tab}
-                        isSelected={selected.has(photo.id)}
-                        onToggleSelect={() => toggleSelect(photo.id)}
-                        onKeepThisOne={() => handleKeepThisOne(group, photo.id)}
-                        actionLoading={actionLoading}
-                        pendingStatus={
-                          pendingDeletes.has(photo.id)
-                            ? 'delete'
-                            : pendingRestores.has(photo.id)
-                              ? 'restore'
-                              : undefined
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
+              );
+            })}
+          </div>
+
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} className="py-6 flex justify-center">
+            {loadingMore && (
+              <div className="flex items-center gap-2 text-gray-400 text-sm">
+                <div className="w-4 h-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+                Loading more groups...
               </div>
-            );
-          })}
-        </div>
+            )}
+            {!hasMore && !loadingMore && groups.length > 0 && (
+              <p className="text-xs text-gray-400">All {groups.length.toLocaleString()} groups loaded</p>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
