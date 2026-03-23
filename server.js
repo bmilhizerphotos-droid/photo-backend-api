@@ -1067,6 +1067,74 @@ async function updateDeletedState(photoIds, isDeleted) {
   return updated;
 }
 
+// Keep the single best photo per duplicate group; soft-delete the rest.
+// "Best" = highest resolution (width*height); ties broken by oldest date_taken, then lowest id.
+app.post("/api/photos/duplicates/keep-best", authenticateToken, async (req, res) => {
+  try {
+    // Fetch every duplicate group with its photos in one query
+    const rows = await dbAll(`
+      SELECT id, duplicate_group_id, width, height, date_taken, is_deleted
+      FROM photos
+      WHERE duplicate_group_id IS NOT NULL AND is_deleted = 0
+      ORDER BY duplicate_group_id, id ASC
+    `);
+
+    // Group by duplicate_group_id
+    const groups = {};
+    for (const row of rows) {
+      const g = row.duplicate_group_id;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(row);
+    }
+
+    // Pick the keeper in each group, collect the rest as toDelete
+    const toDelete = [];
+    for (const photos of Object.values(groups)) {
+      if (photos.length < 2) continue;
+      let best = photos[0];
+      let bestScore = (best.width || 0) * (best.height || 0);
+      for (const p of photos) {
+        const score = (p.width || 0) * (p.height || 0);
+        if (score > bestScore) { best = p; bestScore = score; continue; }
+        if (score === bestScore) {
+          // prefer older date
+          const bd = best.date_taken ? new Date(best.date_taken).getTime() : Infinity;
+          const pd = p.date_taken   ? new Date(p.date_taken).getTime()   : Infinity;
+          if (pd < bd) { best = p; }
+        }
+      }
+      for (const p of photos) {
+        if (p.id !== best.id) toDelete.push(p.id);
+      }
+    }
+
+    if (toDelete.length === 0) {
+      return res.json({ deleted: 0, message: "Nothing to delete" });
+    }
+
+    // Batch soft-delete in chunks of 500
+    const CHUNK = 500;
+    let deleted = 0;
+    await dbRun("BEGIN");
+    for (let i = 0; i < toDelete.length; i += CHUNK) {
+      const chunk = toDelete.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      const result = await dbRun(
+        `UPDATE photos SET is_deleted = 1 WHERE id IN (${placeholders})`,
+        chunk
+      );
+      deleted += Number(result?.changes || 0);
+    }
+    await dbRun("COMMIT");
+
+    res.json({ deleted, total: toDelete.length });
+  } catch (err) {
+    console.error("POST /api/photos/duplicates/keep-best error:", err);
+    try { await dbRun("ROLLBACK"); } catch {}
+    res.status(500).json({ error: "Failed to apply keep-best" });
+  }
+});
+
 app.post("/api/photos/soft-delete", authenticateToken, async (req, res) => {
   try {
     const { photoIds } = req.body ?? {};

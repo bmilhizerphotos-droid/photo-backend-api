@@ -538,6 +538,21 @@ export async function fetchBursts(
   return fetchDuplicateGroups("/api/photos/bursts", offset, limit);
 }
 
+export async function keepBestDuplicates(): Promise<{ deleted: number; total: number }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/duplicates/keep-best`
+    : `/api/photos/duplicates/keep-best`;
+
+  const res = await fetchWithAuth(url, { method: "POST" }, 120000);
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Failed to keep best: ${res.status}`);
+  }
+
+  return res.json();
+}
+
 export async function startDuplicateScan(): Promise<{ started: boolean; message: string }> {
   const url = API_BASE
     ? `${API_BASE}/api/photos/scan-duplicates`

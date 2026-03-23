@@ -6,6 +6,7 @@ import {
   startDuplicateScan,
   softDeletePhotos,
   restorePhotos,
+  keepBestDuplicates,
   DuplicateGroup,
   DuplicatePhoto,
   DuplicateStats,
@@ -36,6 +37,8 @@ export default function DuplicatesView() {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [pendingDeletes, setPendingDeletes] = useState<Set<number>>(new Set());
   const [pendingRestores, setPendingRestores] = useState<Set<number>>(new Set());
+  const [keepBestChecked, setKeepBestChecked] = useState(false);
+  const [keepBestResult, setKeepBestResult] = useState<{ deleted: number } | null>(null);
 
   // Stable refs for infinite scroll
   const dupOffsetRef   = useRef(0);
@@ -140,6 +143,29 @@ export default function DuplicatesView() {
     obs.observe(el);
     return () => obs.disconnect();
   }, [hasMore, loading, loadMore]);
+
+  function handleKeepBestApply() {
+    if (!keepBestChecked) return;
+    const dupCount = stats?.duplicatePhotos ?? 0;
+    const estimate = dupCount > 0 ? dupCount - (stats?.duplicateGroups ?? 0) : '?';
+    setConfirmDialog({
+      message: `Keep the highest-resolution photo in each of the ${(stats?.duplicateGroups ?? 0).toLocaleString()} duplicate groups and soft-delete the rest (~${typeof estimate === 'number' ? estimate.toLocaleString() : estimate} photos)? This can be undone via Restore.`,
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        setActionLoading(true);
+        try {
+          const result = await keepBestDuplicates();
+          setKeepBestResult({ deleted: result.deleted });
+          setKeepBestChecked(false);
+          await loadData();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Keep-best failed');
+        } finally {
+          setActionLoading(false);
+        }
+      },
+    });
+  }
 
   async function handleScan() {
     try {
@@ -384,6 +410,56 @@ export default function DuplicatesView() {
           </div>
         </div>
       )}
+
+      {/* Keep Best panel */}
+      {keepBestResult && (
+        <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
+          <span className="text-sm text-green-800">
+            ✓ Done — soft-deleted {keepBestResult.deleted.toLocaleString()} duplicate photos.
+          </span>
+          <button onClick={() => setKeepBestResult(null)} className="text-green-600 hover:text-green-800 text-lg leading-none">×</button>
+        </div>
+      )}
+      <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+        <label className="flex items-start gap-3 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={keepBestChecked}
+            onChange={(e) => setKeepBestChecked(e.target.checked)}
+            className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-500 focus:ring-blue-400 cursor-pointer"
+          />
+          <div className="flex-1">
+            <span className="text-sm font-medium text-gray-800">Keep best photo in each group & delete the rest</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Automatically picks the highest-resolution copy in each duplicate group (ties broken by oldest date) and soft-deletes all others. Applies to all {(stats?.duplicateGroups ?? 0).toLocaleString()} groups at once.
+            </p>
+          </div>
+        </label>
+        {keepBestChecked && (
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={handleKeepBestApply}
+              disabled={actionLoading}
+              className="px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {actionLoading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Applying...
+                </>
+              ) : (
+                <>Apply — keep best, delete duplicates</>
+              )}
+            </button>
+            <button
+              onClick={() => setKeepBestChecked(false)}
+              className="px-3 py-2 text-gray-500 text-sm hover:text-gray-700"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
 
       {scanning && (
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
