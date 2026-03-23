@@ -62,10 +62,9 @@ export default function App() {
     loadMore,
   } = useInfinitePhotos(fetchPhotos, 50);
 
-  // Debounce: update searchQuery 400 ms after the user stops typing
-  useEffect(() => {
-    const t = setTimeout(() => setSearchQuery(searchInput), 400);
-    return () => clearTimeout(t);
+  // Submit search (called by form onSubmit and search button)
+  const submitSearch = useCallback(() => {
+    setSearchQuery(searchInput.trim());
   }, [searchInput]);
 
   const searching = view === "photos" && searchQuery.trim().length > 0;
@@ -255,15 +254,34 @@ export default function App() {
 
     if (view === "photos") {
       return (
-        <div className="mb-4">
+        <form
+          className="mb-4 flex gap-2"
+          onSubmit={(e) => { e.preventDefault(); submitSearch(); }}
+        >
           <input
             type="text"
-            placeholder='Search "Michigan"'
+            placeholder='Search photos…'
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="w-full px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
+            className="flex-1 px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
           />
-        </div>
+          {searchInput.trim() && (
+            <button
+              type="button"
+              onClick={() => { setSearchInput(""); setSearchQuery(""); }}
+              className="px-3 py-2 text-gray-400 hover:text-gray-600 text-lg leading-none"
+              title="Clear"
+            >
+              ✕
+            </button>
+          )}
+          <button
+            type="submit"
+            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full transition-colors"
+          >
+            Search
+          </button>
+        </form>
       );
     }
 
@@ -272,7 +290,7 @@ export default function App() {
     }
 
     return null;
-  }, [view, activePerson, searchQuery]);
+  }, [view, activePerson, searchInput, submitSearch]);
 
   const renderView = () => {
     if (view === "photos") {
