@@ -81,6 +81,7 @@ const RecentIcon        = () => <Icon d={["M12 8v4l3 3", "M3.05 11a9 9 0 1 0 .5-
 const SharedIcon        = () => <Icon d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />;
 const ImportIcon        = () => <Icon d={["M12 4v12m0 0l-4-4m4 4l4-4", "M4 20h16"]} />;
 const TrashIcon         = () => <Icon d={["M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"]} />;
+const DuplicatesIcon    = () => <Icon d={["M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"]} />;
 
 const NAV_ITEMS: { id: AppView; label: string; icon: React.ReactNode }[] = [
   { id: "photos",         label: "Photos",                  icon: <PhotosIcon /> },
@@ -96,6 +97,7 @@ const NAV_ITEMS: { id: AppView; label: string; icon: React.ReactNode }[] = [
   { id: "shared",         label: "Shared",                  icon: <SharedIcon /> },
   { id: "import",         label: "Add",                     icon: <ImportIcon /> },
   { id: "trash",          label: "Trash",                   icon: <TrashIcon /> },
+  { id: "duplicates",    label: "Duplicates",              icon: <DuplicatesIcon /> },
 ];
 
 export default function Sidebar({ view, onChangeView }: SidebarProps) {
