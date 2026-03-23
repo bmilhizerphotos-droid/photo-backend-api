@@ -388,6 +388,31 @@ export default function App() {
       );
     }
 
+    // Placeholder views for future features
+    const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {
+      documents:       { emoji: "📄", title: "Documents",               desc: "PDFs, Word docs, and other documents from your photos." },
+      screenshots:     { emoji: "🖥️", title: "Screenshots & recordings", desc: "Screenshots and screen recordings will appear here." },
+      favorites:       { emoji: "❤️", title: "Favorites",               desc: "Photos you've marked as favorites will appear here." },
+      places:          { emoji: "🗺️", title: "Places",                  desc: "Photos grouped by location will appear here." },
+      videos:          { emoji: "🎬", title: "Videos",                  desc: "Your video files will appear here." },
+      "recently-added":{ emoji: "🕐", title: "Recently added",          desc: "Photos added in the last 30 days." },
+      shared:          { emoji: "🔗", title: "Shared",                  desc: "Photos shared with or by you will appear here." },
+      import:          { emoji: "➕", title: "Add photos",              desc: "Import new photos into your library." },
+      trash:           { emoji: "🗑️", title: "Trash",                   desc: "Deleted photos are kept here for 60 days before permanent removal." },
+    };
+
+    const placeholder = placeholders[view];
+    if (placeholder) {
+      return (
+        <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
+          <span className="text-5xl">{placeholder.emoji}</span>
+          <h2 className="text-xl font-semibold text-gray-800">{placeholder.title}</h2>
+          <p className="text-sm text-gray-500 max-w-xs">{placeholder.desc}</p>
+          <span className="text-xs text-gray-400 mt-2">Coming soon</span>
+        </div>
+      );
+    }
+
     return <div className="text-gray-400">Select a view</div>;
   };
 
