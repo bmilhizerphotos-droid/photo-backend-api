@@ -141,7 +141,7 @@ export default function DocumentsView({
         <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
           <div className="flex items-center justify-between text-sm text-gray-700 mb-2">
             <span>
-              {scanning ? 'AI scan in progress…' : 'Last scan results'}
+              {scanning ? 'AI scan in progress… (free tier: ~1,500 photos/day)' : 'Last scan results'}
             </span>
             <span className="font-medium">
               {status.scanned.toLocaleString()} / {status.total.toLocaleString()} scanned ({scannedPct}%)
@@ -184,7 +184,7 @@ export default function DocumentsView({
           <p className="text-sm text-gray-500 max-w-sm">
             {status && status.scanned > 0
               ? 'No document photos were detected in your library.'
-              : 'Click "Scan for Documents" to have AI automatically detect photos of documents, receipts, invoices, and forms in your library.'}
+              : 'Click "Scan for Documents" to have AI automatically detect photos of documents, receipts, invoices, and forms in your library. Uses the free Gemini AI tier — no cost.'}
           </p>
         </div>
       )}

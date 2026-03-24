@@ -1,7 +1,8 @@
 /**
  * scan-documents.js
- * Uses Gemini Vision to classify photos as documents.
- * Reads thumbnails from thumb-cache/, sends them in batches to Gemini,
+ * Uses Gemini 2.0 Flash Lite (FREE tier) to classify photos as documents.
+ * Free tier limits: 30 requests/min, 1,500 requests/day — no cost.
+ * Reads thumbnails from thumb-cache/, sends them in batches,
  * and writes is_document=1 on matched photos.
  *
  * Usage:
@@ -18,11 +19,12 @@ import fetch from "node-fetch";
 import { db, dbRun, dbAll } from "./db.js";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+// gemini-2.0-flash-lite = FREE tier (30 RPM, 1500 RPD, no billing required)
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
 const THUMB_DIR = path.resolve("thumb-cache");
-const BATCH_SIZE = 8; // photos per Gemini request
-const DELAY_MS = 1200; // ms between batches to stay under rate limit
+const BATCH_SIZE = 8;   // photos per request (8 images × ~1KB each = well within limits)
+const DELAY_MS = 2100;  // 2.1s between batches → ~28 req/min (free tier cap: 30 RPM)
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
