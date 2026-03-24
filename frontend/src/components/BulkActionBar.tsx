@@ -59,7 +59,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
   return (
     <>
       {/* Sticky Action Bar */}
-      <div className="sticky bottom-0 z-30 bg-white border-t border-gray-200 shadow-lg">
+      <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">

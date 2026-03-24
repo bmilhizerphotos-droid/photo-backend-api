@@ -44,8 +44,9 @@ export default function App() {
 
   // Selection state for gallery
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [selectModeActive, setSelectModeActive] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
-  const selectMode = selectedIds.size > 0;
+  const selectMode = selectModeActive || selectedIds.size > 0;
 
   // 🔍 Search state — input is debounced before triggering search
   const [searchInput, setSearchInput] = useState("");   // raw keystroke value
@@ -211,8 +212,9 @@ export default function App() {
   }, [user, resetPhotos, loadMore]);
 
   const openPhoto = useCallback((p: Photo, e?: React.MouseEvent) => {
-    // ctrl+click or existing selection → toggle selection
-    if (e?.ctrlKey || e?.metaKey || selectedIds.size > 0) {
+    // In select mode, or ctrl/cmd+click → toggle selection
+    if (selectModeActive || selectedIds.size > 0 || e?.ctrlKey || e?.metaKey) {
+      setSelectModeActive(true);
       setSelectedIds((prev) => {
         const next = new Set(prev);
         next.has(p.id) ? next.delete(p.id) : next.add(p.id);
@@ -224,7 +226,7 @@ export default function App() {
     if (typeof url === "string" && url.length > 0) {
       setModalPhoto({ ...p, image_url: url });
     }
-  }, [selectedIds.size]);
+  }, [selectModeActive, selectedIds.size]);
 
   const handleBulkAction = useCallback(async (action: 'favorite' | 'unfavorite' | 'delete') => {
     const ids = Array.from(selectedIds);
@@ -233,6 +235,7 @@ export default function App() {
     try {
       await bulkAction(action, ids);
       setSelectedIds(new Set());
+      setSelectModeActive(false);
       // Reflect changes in local photos list without a full reload
       if (action === 'favorite') {
         resetPhotos();
@@ -294,34 +297,61 @@ export default function App() {
 
     if (view === "photos") {
       return (
-        <form
-          className="mb-4 flex gap-2"
-          onSubmit={(e) => { e.preventDefault(); submitSearch(); }}
-        >
-          <input
-            type="text"
-            placeholder='Search photos…'
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            className="flex-1 px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
-          />
-          {searchInput.trim() && (
-            <button
-              type="button"
-              onClick={() => { setSearchInput(""); setSearchQuery(""); }}
-              className="px-3 py-2 text-gray-400 hover:text-gray-600 text-lg leading-none"
-              title="Clear"
-            >
-              ✕
-            </button>
-          )}
-          <button
-            type="submit"
-            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full transition-colors"
+        <div className="mb-4 flex flex-col gap-2">
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => { e.preventDefault(); submitSearch(); }}
           >
-            Search
-          </button>
-        </form>
+            <input
+              type="text"
+              placeholder='Search photos…'
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
+            />
+            {searchInput.trim() && (
+              <button
+                type="button"
+                onClick={() => { setSearchInput(""); setSearchQuery(""); }}
+                className="px-3 py-2 text-gray-400 hover:text-gray-600 text-lg leading-none"
+                title="Clear"
+              >
+                ✕
+              </button>
+            )}
+            <button
+              type="submit"
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full transition-colors"
+            >
+              Search
+            </button>
+          </form>
+          {/* Select mode toggle */}
+          {selectMode ? (
+            <div className="flex items-center gap-3 px-1">
+              <span className="text-sm font-medium text-blue-700">
+                {selectedIds.size > 0 ? `${selectedIds.size} selected` : "Tap photos to select"}
+              </span>
+              <button
+                type="button"
+                onClick={() => { setSelectedIds(new Set()); setSelectModeActive(false); }}
+                className="text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 px-1">
+              <button
+                type="button"
+                onClick={() => setSelectModeActive(true)}
+                className="text-sm text-gray-500 hover:text-gray-700"
+              >
+                ☑ Select photos
+              </button>
+            </div>
+          )}
+        </div>
       );
     }
 
@@ -395,13 +425,6 @@ export default function App() {
             groupByDate
           />
           <div ref={sentinelRef} className="h-10" />
-          <BulkActionBar
-            selectedCount={selectedIds.size}
-            selectedIds={selectedIds}
-            onAction={handleBulkAction}
-            onClear={() => setSelectedIds(new Set())}
-            isLoading={bulkLoading}
-          />
         </>
       );
     }
@@ -516,6 +539,7 @@ export default function App() {
             setSearchQuery("");
           }
           setSelectedIds(new Set());
+          setSelectModeActive(false);
           setView(v);
         }}
         albums={albums}
@@ -560,6 +584,15 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Bulk action bar — fixed to viewport bottom, shown whenever photos are selected */}
+      <BulkActionBar
+        selectedCount={selectedIds.size}
+        selectedIds={selectedIds}
+        onAction={handleBulkAction}
+        onClear={() => { setSelectedIds(new Set()); setSelectModeActive(false); }}
+        isLoading={bulkLoading}
+      />
     </div>
   );
 }
