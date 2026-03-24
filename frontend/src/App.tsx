@@ -4,6 +4,7 @@ import {
   fetchAlbums,
   fetchPeople,
   fetchPersonPhotos,
+  fetchAlbumPhotos,
   searchPhotos,
   bulkAction,
   Photo,
@@ -23,6 +24,9 @@ import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
 import DuplicatesView from "./components/DuplicatesView";
 import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
+import AlbumsGrid from "./components/AlbumsGrid";
+import CreateAlbumModal from "./components/CreateAlbumModal";
+import AddToAlbumModal from "./components/AddToAlbumModal";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { useAuth } from "./hooks/useAuth";
 
@@ -31,6 +35,20 @@ export default function App() {
   const [view, setView] = useState<AppView>("photos");
 
   const [albums, setAlbums] = useState<Album[]>([]);
+  const [albumRefreshTrigger, setAlbumRefreshTrigger] = useState(0);
+
+  // Album detail
+  const [activeAlbum, setActiveAlbum] = useState<{ id: number; name: string; description?: string | null } | null>(null);
+  const [albumPhotos, setAlbumPhotos] = useState<Photo[]>([]);
+  const [albumPhotosLoading, setAlbumPhotosLoading] = useState(false);
+  const [albumPhotosHasMore, setAlbumPhotosHasMore] = useState(false);
+  const albumPhotosOffsetRef = useRef(0);
+  const albumPhotosHasMoreRef = useRef(false);
+  const albumPhotosInFlight = useRef(false);
+
+  // Album modals
+  const [showCreateAlbumModal, setShowCreateAlbumModal] = useState(false);
+  const [showAddToAlbumModal, setShowAddToAlbumModal] = useState(false);
 
   const [people, setPeople] = useState<Person[]>([]);
   const [peopleLoading, setPeopleLoading] = useState(false);
@@ -228,7 +246,11 @@ export default function App() {
     }
   }, [selectModeActive, selectedIds.size]);
 
-  const handleBulkAction = useCallback(async (action: 'favorite' | 'unfavorite' | 'delete') => {
+  const handleBulkAction = useCallback(async (action: string) => {
+    if (action === 'add_to_album') {
+      setShowAddToAlbumModal(true);
+      return;
+    }
     const ids = Array.from(selectedIds);
     if (!ids.length) return;
     setBulkLoading(true);
@@ -254,6 +276,41 @@ export default function App() {
   const openPhotoTagEditor = useCallback((p: Photo) => {
     setSelectedPhotoForTagging(p);
   }, []);
+
+  const loadAlbum = useCallback(async (albumId: number) => {
+    albumPhotosOffsetRef.current = 0;
+    albumPhotosHasMoreRef.current = false;
+    albumPhotosInFlight.current = false;
+    setAlbumPhotos([]);
+    setAlbumPhotosHasMore(false);
+    setAlbumPhotosLoading(true);
+    try {
+      const data = await fetchAlbumPhotos(albumId, 0, 50);
+      setActiveAlbum(data.album);
+      setAlbumPhotos(data.photos);
+      albumPhotosOffsetRef.current = data.photos.length;
+      albumPhotosHasMoreRef.current = data.hasMore;
+      setAlbumPhotosHasMore(data.hasMore);
+      setView("album-detail");
+    } catch {
+      setAlbumPhotos([]);
+    } finally {
+      setAlbumPhotosLoading(false);
+    }
+  }, []);
+
+  const loadMoreAlbumPhotos = useCallback(async () => {
+    if (albumPhotosInFlight.current || !albumPhotosHasMoreRef.current || !activeAlbum) return;
+    albumPhotosInFlight.current = true;
+    try {
+      const data = await fetchAlbumPhotos(activeAlbum.id, albumPhotosOffsetRef.current, 50);
+      setAlbumPhotos(prev => [...prev, ...data.photos]);
+      albumPhotosOffsetRef.current += data.photos.length;
+      albumPhotosHasMoreRef.current = data.hasMore;
+      setAlbumPhotosHasMore(data.hasMore);
+    } catch {}
+    finally { albumPhotosInFlight.current = false; }
+  }, [activeAlbum]);
 
   const loadPerson = useCallback(async (person: Person) => {
     setActivePerson(person);
@@ -429,6 +486,70 @@ export default function App() {
       );
     }
 
+    if (view === "albums") {
+      return (
+        <>
+          <AlbumsGrid
+            onSelectAlbum={(id) => loadAlbum(id)}
+            onCreateAlbum={() => setShowCreateAlbumModal(true)}
+            refreshTrigger={albumRefreshTrigger}
+          />
+          <CreateAlbumModal
+            isOpen={showCreateAlbumModal}
+            onClose={() => setShowCreateAlbumModal(false)}
+            onCreated={(album) => {
+              setAlbums(prev => [album, ...prev]);
+              setAlbumRefreshTrigger(t => t + 1);
+              setShowCreateAlbumModal(false);
+            }}
+          />
+        </>
+      );
+    }
+
+    if (view === "album-detail" && activeAlbum) {
+      return (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <button
+              type="button"
+              className="text-sm text-blue-600 hover:underline"
+              onClick={() => { setActiveAlbum(null); setAlbumPhotos([]); setView("albums"); }}
+            >
+              ← Back to Albums
+            </button>
+            <div className="text-lg font-semibold text-gray-900">{activeAlbum.name}</div>
+            <div className="w-[110px]" />
+          </div>
+          {albumPhotosLoading && albumPhotos.length === 0 ? (
+            <div className="flex justify-center py-12">
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : albumPhotos.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">No photos in this album yet.</div>
+          ) : (
+            <>
+              <PhotoMasonry
+                photos={albumPhotos}
+                onPhotoClick={openPhoto}
+                selectedIds={selectedIds}
+                selectMode={selectMode}
+                groupByDate
+              />
+              {albumPhotosHasMore && (
+                <button
+                  onClick={loadMoreAlbumPhotos}
+                  className="mx-auto mt-4 block px-6 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-full"
+                >
+                  Load more
+                </button>
+              )}
+            </>
+          )}
+        </>
+      );
+    }
+
     if (view === "people") {
       return (
         <PeopleGrid
@@ -534,6 +655,10 @@ export default function App() {
             setActivePerson(null);
             setPersonPhotos([]);
           }
+          if (v !== "album-detail") {
+            setActiveAlbum(null);
+            setAlbumPhotos([]);
+          }
           if (v !== "photos") {
             setSearchInput("");
             setSearchQuery("");
@@ -543,9 +668,9 @@ export default function App() {
           setView(v);
         }}
         albums={albums}
-        selectedAlbumId={null}
-        onSelectAlbum={() => {}}
-        onCreateAlbum={() => {}}
+        selectedAlbumId={activeAlbum?.id ?? null}
+        onSelectAlbum={(id) => loadAlbum(id)}
+        onCreateAlbum={() => setShowCreateAlbumModal(true)}
       />
 
       <main className="flex-1 p-4 overflow-y-auto">
@@ -584,6 +709,20 @@ export default function App() {
           }}
         />
       )}
+
+      <AddToAlbumModal
+        isOpen={showAddToAlbumModal}
+        onClose={() => setShowAddToAlbumModal(false)}
+        photoIds={Array.from(selectedIds)}
+        onAdded={(_albumId, albumName) => {
+          setShowAddToAlbumModal(false);
+          setSelectedIds(new Set());
+          setSelectModeActive(false);
+          setAlbumRefreshTrigger(t => t + 1);
+          setAlbums(prev => prev); // trigger re-fetch in sidebar
+          alert(`Added to "${albumName}"`);
+        }}
+      />
 
       {/* Bulk action bar — fixed to viewport bottom, shown whenever select mode is active */}
       <BulkActionBar

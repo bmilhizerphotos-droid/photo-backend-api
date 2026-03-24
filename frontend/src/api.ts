@@ -221,6 +221,58 @@ export async function fetchAlbums(): Promise<Album[]> {
   }
 }
 
+export async function createAlbum(name: string, description?: string): Promise<Album> {
+  const url = API_BASE ? `${API_BASE}/api/albums` : `/api/albums`;
+  const res = await fetchWithAuth(url, { method: "POST", body: JSON.stringify({ name, description }) });
+  if (!res.ok) throw new Error(`Failed to create album: ${res.status}`);
+  return res.json();
+}
+
+export async function updateAlbum(id: number, updates: { name: string; description?: string }): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/albums/${id}` : `/api/albums/${id}`;
+  const res = await fetchWithAuth(url, { method: "PUT", body: JSON.stringify(updates) });
+  if (!res.ok) throw new Error(`Failed to update album: ${res.status}`);
+}
+
+export async function deleteAlbum(id: number): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/albums/${id}` : `/api/albums/${id}`;
+  const res = await fetchWithAuth(url, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete album: ${res.status}`);
+}
+
+export async function fetchAlbumPhotos(albumId: number, offset = 0, limit = 50): Promise<{
+  album: { id: number; name: string; description?: string | null };
+  photos: Photo[];
+  total: number;
+  hasMore: boolean;
+}> {
+  const url = API_BASE
+    ? `${API_BASE}/api/albums/${albumId}/photos?offset=${offset}&limit=${limit}`
+    : `/api/albums/${albumId}/photos?offset=${offset}&limit=${limit}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch album photos: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return {
+    album: data.album,
+    total: data.total ?? 0,
+    hasMore: data.hasMore ?? false,
+    photos: normalizePhotos(data.photos ?? [], token),
+  };
+}
+
+export async function addPhotosToAlbum(albumId: number, photoIds: number[]): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/albums/${albumId}/photos` : `/api/albums/${albumId}/photos`;
+  const res = await fetchWithAuth(url, { method: "POST", body: JSON.stringify({ photoIds }) });
+  if (!res.ok) throw new Error(`Failed to add photos to album: ${res.status}`);
+}
+
+export async function removePhotosFromAlbum(albumId: number, photoIds: number[]): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/albums/${albumId}/photos` : `/api/albums/${albumId}/photos`;
+  const res = await fetchWithAuth(url, { method: "DELETE", body: JSON.stringify({ photoIds }) });
+  if (!res.ok) throw new Error(`Failed to remove photos from album: ${res.status}`);
+}
+
 /* =====================
    PEOPLE
    ===================== */

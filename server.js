@@ -42,7 +42,7 @@ app.use((req, res, next) => {
   if (origin && allowedOrigins.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
   }
-  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.header(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization"
@@ -53,7 +53,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors({ origin: allowedOrigins, credentials: true, methods: ["GET", "POST", "DELETE", "OPTIONS"] }));
+app.use(cors({ origin: allowedOrigins, credentials: true, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }));
 app.use(express.json());
 
 (async () => {
@@ -64,6 +64,21 @@ app.use(express.json());
       console.error("Failed to add is_deleted column:", err);
     }
   }
+
+  // Albums schema
+  await dbRun(`CREATE TABLE IF NOT EXISTS albums (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    description TEXT,
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now'))
+  )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS album_photos (
+    album_id  INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    photo_id  INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+    added_at  TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (album_id, photo_id)
+  )`);
 })();
 
 // ---------------- AUTHENTICATION MIDDLEWARE ----------------
@@ -836,18 +851,167 @@ app.get("/api/search", authenticateToken, async (req, res) => {
 });
 
 // ALBUMS
-app.get("/api/albums", authenticateToken, async (_req, res) => {
+// Helper: build base URL from request
+function baseUrl(req) {
+  const protocol = req.get("x-forwarded-proto") || req.protocol;
+  const host = req.get("x-forwarded-host") || req.get("host");
+  return `${protocol}://${host}`;
+}
+
+app.get("/api/albums", authenticateToken, async (req, res) => {
   try {
-    const tableCheck = await dbGet("SELECT name FROM sqlite_master WHERE type='table' AND name='albums'");
-    if (!tableCheck) return res.json([]);
-    const cols = await dbAll(`PRAGMA table_info(albums)`);
-    const hasPhotoCount = cols.some((r) => r.name === 'photo_count');
-    const rows = hasPhotoCount
-      ? await dbAll(`SELECT id, name, photo_count AS photoCount FROM albums ORDER BY id DESC`)
-      : await dbAll(`SELECT id, name, NULL AS photoCount FROM albums ORDER BY id DESC`);
-    res.json(rows || []);
+    const rows = await dbAll(`
+      SELECT a.id, a.name, a.description, a.created_at,
+             COUNT(ap.photo_id) AS photoCount,
+             (SELECT ap2.photo_id FROM album_photos ap2
+              WHERE ap2.album_id = a.id
+              ORDER BY ap2.added_at ASC LIMIT 1) AS coverPhotoId
+      FROM albums a
+      LEFT JOIN album_photos ap ON ap.album_id = a.id
+      GROUP BY a.id
+      ORDER BY a.created_at DESC
+    `);
+    const base = baseUrl(req);
+    res.json((rows || []).map(r => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      photoCount: r.photoCount ?? 0,
+      coverPhotoId: r.coverPhotoId ?? null,
+      coverPhotoUrl: r.coverPhotoId ? `${base}/thumbnails/${r.coverPhotoId}` : null,
+    })));
   } catch (err) {
+    console.error("GET /api/albums error:", err);
     res.status(500).json({ error: "Failed to load albums" });
+  }
+});
+
+app.post("/api/albums", authenticateToken, async (req, res) => {
+  try {
+    const { name, description } = req.body ?? {};
+    if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+    const result = await dbRun(
+      "INSERT INTO albums (name, description) VALUES (?, ?)",
+      [name.trim(), description?.trim() || null]
+    );
+    const album = await dbGet("SELECT * FROM albums WHERE id = ?", [result.lastID]);
+    res.json({ id: album.id, name: album.name, description: album.description, photoCount: 0, coverPhotoUrl: null });
+  } catch (err) {
+    console.error("POST /api/albums error:", err);
+    res.status(500).json({ error: "Failed to create album" });
+  }
+});
+
+app.put("/api/albums/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { name, description } = req.body ?? {};
+    if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+    await dbRun(
+      "UPDATE albums SET name = ?, description = ?, updated_at = datetime('now') WHERE id = ?",
+      [name.trim(), description?.trim() || null, id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("PUT /api/albums/:id error:", err);
+    res.status(500).json({ error: "Failed to update album" });
+  }
+});
+
+app.delete("/api/albums/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await dbRun("DELETE FROM album_photos WHERE album_id = ?", [id]);
+    await dbRun("DELETE FROM albums WHERE id = ?", [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /api/albums/:id error:", err);
+    res.status(500).json({ error: "Failed to delete album" });
+  }
+});
+
+app.get("/api/albums/:id/photos", authenticateToken, async (req, res) => {
+  try {
+    const albumId = Number(req.params.id);
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    const limit  = Math.min(200, parseInt(req.query.limit)  || 50);
+    const album  = await dbGet("SELECT * FROM albums WHERE id = ?", [albumId]);
+    if (!album) return res.status(404).json({ error: "Album not found" });
+
+    const total = (await dbGet("SELECT COUNT(*) AS c FROM album_photos WHERE album_id = ?", [albumId]))?.c ?? 0;
+    const cols  = await dbAll("PRAGMA table_info(photos)");
+    const colNames = cols.map(c => c.name);
+    const optional = ["width","height","date_taken","is_favorite","is_deleted"]
+      .filter(c => colNames.includes(c))
+      .map(c => `p.${c}`).join(", ");
+    const base = baseUrl(req);
+    const token = req.query.token || "";
+    const tokenSuffix = token ? `?token=${encodeURIComponent(token)}` : "";
+
+    const rows = await dbAll(`
+      SELECT p.id, p.filename, p.full_path, p.thumbnail_path${optional ? ", " + optional : ""}
+      FROM photos p
+      JOIN album_photos ap ON ap.photo_id = p.id
+      WHERE ap.album_id = ? AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
+      ORDER BY ap.added_at ASC
+      LIMIT ? OFFSET ?
+    `, [albumId, limit + 1, offset]);
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit).map(p => ({
+      id: p.id,
+      filename: p.filename,
+      thumbnailUrl: `${base}/thumbnails/${p.id}${tokenSuffix}`,
+      image_url: `${base}/api/photos/${p.id}/file${tokenSuffix}`,
+      width: p.width || null,
+      height: p.height || null,
+      dateTaken: p.date_taken || null,
+      isFavorite: Boolean(p.is_favorite),
+      isDeleted: Boolean(p.is_deleted),
+    }));
+
+    res.json({ album: { id: album.id, name: album.name, description: album.description }, total, offset, limit, hasMore, photos: page });
+  } catch (err) {
+    console.error("GET /api/albums/:id/photos error:", err);
+    res.status(500).json({ error: "Failed to load album photos" });
+  }
+});
+
+app.post("/api/albums/:id/photos", authenticateToken, async (req, res) => {
+  try {
+    const albumId = Number(req.params.id);
+    const { photoIds } = req.body ?? {};
+    if (!Array.isArray(photoIds) || photoIds.length === 0)
+      return res.status(400).json({ error: "photoIds must be a non-empty array" });
+    let added = 0;
+    for (const pid of photoIds) {
+      try {
+        await dbRun("INSERT OR IGNORE INTO album_photos (album_id, photo_id) VALUES (?, ?)", [albumId, Number(pid)]);
+        added++;
+      } catch {}
+    }
+    res.json({ added });
+  } catch (err) {
+    console.error("POST /api/albums/:id/photos error:", err);
+    res.status(500).json({ error: "Failed to add photos to album" });
+  }
+});
+
+app.delete("/api/albums/:id/photos", authenticateToken, async (req, res) => {
+  try {
+    const albumId = Number(req.params.id);
+    const { photoIds } = req.body ?? {};
+    if (!Array.isArray(photoIds) || photoIds.length === 0)
+      return res.status(400).json({ error: "photoIds must be a non-empty array" });
+    const placeholders = photoIds.map(() => "?").join(",");
+    const result = await dbRun(
+      `DELETE FROM album_photos WHERE album_id = ? AND photo_id IN (${placeholders})`,
+      [albumId, ...photoIds.map(Number)]
+    );
+    res.json({ removed: result?.changes ?? 0 });
+  } catch (err) {
+    console.error("DELETE /api/albums/:id/photos error:", err);
+    res.status(500).json({ error: "Failed to remove photos from album" });
   }
 });
 
