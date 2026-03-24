@@ -22,6 +22,7 @@ import { ImageModal } from "./components/ImageModal";
 import { FaceTagModal } from "./components/FaceTagModal";
 import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
 import DuplicatesView from "./components/DuplicatesView";
+import DocumentsView from "./components/DocumentsView";
 import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
 import AlbumsGrid from "./components/AlbumsGrid";
@@ -585,9 +586,10 @@ export default function App() {
       );
     }
 
+    if (view === "documents") return <DocumentsView onPhotoClick={(p) => setModalPhoto(p)} />;
+
     // Placeholder views for future features
     const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {
-      documents:       { emoji: "📄", title: "Documents",               desc: "PDFs, Word docs, and other documents from your photos." },
       screenshots:     { emoji: "🖥️", title: "Screenshots & recordings", desc: "Screenshots and screen recordings will appear here." },
       places:          { emoji: "🗺️", title: "Places",                  desc: "Photos grouped by location will appear here." },
       videos:          { emoji: "🎬", title: "Videos",                  desc: "Your video files will appear here." },

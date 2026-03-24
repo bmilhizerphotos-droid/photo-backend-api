@@ -65,6 +65,17 @@ app.use(express.json());
     }
   }
 
+  // Document detection columns
+  for (const sql of [
+    "ALTER TABLE photos ADD COLUMN is_document INTEGER DEFAULT 0",
+    "ALTER TABLE photos ADD COLUMN document_scanned INTEGER DEFAULT 0",
+  ]) {
+    try { await dbRun(sql); } catch (err) {
+      if (!/duplicate column/i.test(err?.message || "")) console.error(sql, err);
+    }
+  }
+  await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_document ON photos(is_document)");
+
   // Albums schema
   await dbRun(`CREATE TABLE IF NOT EXISTS albums (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1419,6 +1430,85 @@ app.delete("/api/photos/trash", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("DELETE /api/photos/trash error:", err);
     res.status(500).json({ error: "Failed to permanently delete" });
+  }
+});
+
+// ---------------- DOCUMENTS ----------------
+app.get("/api/photos/documents", authenticateToken, async (req, res) => {
+  try {
+    const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+
+    const [rows, countRow, scannedRow] = await Promise.all([
+      dbAll(
+        `SELECT id, filename, date_taken, created_at
+         FROM photos
+         WHERE is_document = 1 AND is_deleted = 0
+         ORDER BY COALESCE(date_taken, created_at) DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [limit, offset]
+      ),
+      dbGet("SELECT COUNT(*) as total FROM photos WHERE is_document = 1 AND is_deleted = 0"),
+      dbGet("SELECT COUNT(*) as scanned FROM photos WHERE document_scanned = 1 AND is_deleted = 0"),
+    ]);
+
+    const total   = countRow?.total   ?? 0;
+    const scanned = scannedRow?.scanned ?? 0;
+    const photos = rows.map((r) => ({
+      id: r.id,
+      filename: r.filename,
+      thumbnailUrl: `/thumbnails/${r.id}`,
+      dateTaken: r.date_taken ?? null,
+      createdAt: r.created_at,
+    }));
+
+    res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total, scanned });
+  } catch (err) {
+    console.error("GET /api/photos/documents error:", err);
+    res.status(500).json({ error: "Failed to fetch documents" });
+  }
+});
+
+let documentScanRunning = false;
+app.post("/api/photos/scan-documents", authenticateToken, async (req, res) => {
+  if (documentScanRunning) {
+    return res.json({ started: false, message: "Scan already in progress" });
+  }
+  documentScanRunning = true;
+  res.json({ started: true, message: "Document scan started" });
+
+  // Run in background as a child process so it doesn't block the server
+  import("child_process").then(({ spawn }) => {
+    const child = spawn(process.execPath, ["scan-documents.js"], {
+      stdio: "inherit",
+      env: { ...process.env },
+    });
+    child.on("close", (code) => {
+      console.log(`Document scan finished with code ${code}`);
+      documentScanRunning = false;
+    });
+    child.on("error", (err) => {
+      console.error("Document scan process error:", err);
+      documentScanRunning = false;
+    });
+  });
+});
+
+app.get("/api/photos/documents/status", authenticateToken, async (req, res) => {
+  try {
+    const [totalRow, scannedRow, docRow] = await Promise.all([
+      dbGet("SELECT COUNT(*) as total FROM photos WHERE is_deleted = 0"),
+      dbGet("SELECT COUNT(*) as scanned FROM photos WHERE document_scanned = 1 AND is_deleted = 0"),
+      dbGet("SELECT COUNT(*) as docs FROM photos WHERE is_document = 1 AND is_deleted = 0"),
+    ]);
+    res.json({
+      running: documentScanRunning,
+      total: totalRow?.total ?? 0,
+      scanned: scannedRow?.scanned ?? 0,
+      documents: docRow?.docs ?? 0,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to get document scan status" });
   }
 });
 

@@ -639,6 +639,49 @@ export async function startDuplicateScan(): Promise<{ started: boolean; message:
   return res.json();
 }
 
+// ── Documents ──────────────────────────────────────────────────────────────
+
+export interface DocumentScanStatus {
+  running: boolean;
+  total: number;
+  scanned: number;
+  documents: number;
+}
+
+export async function fetchDocuments(
+  offset = 0,
+  limit = 50
+): Promise<{ photos: Photo[]; total: number; hasMore: boolean; scanned: number }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/documents?offset=${offset}&limit=${limit}`
+    : `/api/photos/documents?offset=${offset}&limit=${limit}`;
+
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch documents: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  const photos = normalizePhotos(data.photos ?? [], token);
+  return { photos, total: data.total ?? 0, hasMore: data.hasMore ?? false, scanned: data.scanned ?? 0 };
+}
+
+export async function startDocumentScan(): Promise<{ started: boolean; message: string }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/scan-documents`
+    : `/api/photos/scan-documents`;
+  const res = await fetchWithAuth(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to start document scan: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchDocumentScanStatus(): Promise<DocumentScanStatus> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/documents/status`
+    : `/api/photos/documents/status`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to get document scan status: ${res.status}`);
+  return res.json();
+}
+
 export async function softDeletePhotos(photoIds: number[]): Promise<void> {
   const url = API_BASE
     ? `${API_BASE}/api/photos/soft-delete`

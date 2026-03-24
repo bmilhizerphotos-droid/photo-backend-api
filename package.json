@@ -16,7 +16,13 @@
     "scan-duplicates": "node scan-duplicates.js",
     "scan-duplicates:test": "node scan-duplicates.js --limit 100 --dry-run --verbose",
     "populate-paths": "node populate-photo-paths.js",
-    "populate-paths:test": "node populate-photo-paths.js --limit 10 --verbose --dry-run"
+    "populate-paths:test": "node populate-photo-paths.js --limit 10 --verbose --dry-run",
+    "update-dates": "node update-exif-dates.js",
+    "update-dates:test": "node update-exif-dates.js --limit 50 --dry-run",
+    "update-dates:all": "node update-exif-dates.js --all",
+    "scan-documents": "node scan-documents.js",
+    "scan-documents:test": "node scan-documents.js --limit 50 --dry-run",
+    "scan-documents:all": "node scan-documents.js --all"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
@@ -26,6 +32,7 @@
     "canvas": "^2.11.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
+    "exifr": "^7.1.3",
     "express": "^4.22.1",
     "express-validator": "^7.3.1",
     "firebase-admin": "^12.0.0",
