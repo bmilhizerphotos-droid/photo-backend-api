@@ -10,10 +10,11 @@ type Props = {
   onAction: (action: BulkAction, albumId?: number) => Promise<void>;
   onClear: () => void;
   isLoading?: boolean;
-  onAddToAlbum?: () => void; // Opens the AddToAlbumModal
+  onAddToAlbum?: () => void;
+  selectModeActive?: boolean;
 };
 
-export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, isLoading = false, onAddToAlbum }: Props) {
+export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, isLoading = false, onAddToAlbum, selectModeActive = false }: Props) {
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [tagLoading, setTagLoading] = useState(false);
 
@@ -54,7 +55,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
     }
   };
 
-  if (selectedCount === 0) return null;
+  if (selectedCount === 0 && !selectModeActive) return null;
 
   return (
     <>
@@ -64,7 +65,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <span className="text-sm font-medium text-gray-900">
-                {selectedCount} selected
+                {selectedCount > 0 ? `${selectedCount} selected` : "Tap photos to select"}
               </span>
             </div>
 
@@ -72,7 +73,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
               {/* Favorite Actions */}
               <button
                 onClick={handleFavorite}
-                disabled={isLoading}
+                disabled={isLoading || selectedCount === 0}
                 className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 <span>⭐</span>
@@ -81,7 +82,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
 
               <button
                 onClick={handleUnfavorite}
-                disabled={isLoading}
+                disabled={isLoading || selectedCount === 0}
                 className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 <span>☆</span>
@@ -91,7 +92,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
               {/* Add to Album */}
               <button
                 onClick={handleAddToAlbum}
-                disabled={isLoading}
+                disabled={isLoading || selectedCount === 0}
                 className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 <span>📁</span>
@@ -101,7 +102,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
               {/* Tag Person */}
               <button
                 onClick={handleTagPerson}
-                disabled={isLoading || tagLoading}
+                disabled={isLoading || tagLoading || selectedCount === 0}
                 className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 <span>👤</span>
@@ -111,7 +112,7 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
               {/* Delete */}
               <button
                 onClick={handleDelete}
-                disabled={isLoading}
+                disabled={isLoading || selectedCount === 0}
                 className="px-3 py-2 text-sm font-medium text-red-700 bg-red-100 hover:bg-red-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 <span>🗑️</span>

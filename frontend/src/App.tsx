@@ -585,13 +585,14 @@ export default function App() {
         />
       )}
 
-      {/* Bulk action bar — fixed to viewport bottom, shown whenever photos are selected */}
+      {/* Bulk action bar — fixed to viewport bottom, shown whenever select mode is active */}
       <BulkActionBar
         selectedCount={selectedIds.size}
         selectedIds={selectedIds}
         onAction={handleBulkAction}
         onClear={() => { setSelectedIds(new Set()); setSelectModeActive(false); }}
         isLoading={bulkLoading}
+        selectModeActive={selectMode}
       />
     </div>
   );
