@@ -399,6 +399,19 @@ export async function fetchPhotoTaggedPeople(photoId: number): Promise<Person[]>
   }
 }
 
+export async function bulkTagPhotos(photoIds: number[], personId: number): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/photos/bulk` : `/api/photos/bulk`;
+  const res = await fetchWithAuth(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "tag_person", photoIds, personId }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Bulk tag failed: ${res.status}`);
+  }
+}
+
 export async function tagPersonInPhoto(photoId: number, personId: number): Promise<void> {
   const url = API_BASE
     ? `${API_BASE}/api/photos/${photoId}/people`
@@ -636,6 +649,54 @@ export async function fetchTrash(offset = 0, limit = 50): Promise<{
     thumbnailUrl: buildUrl(p.thumbnailUrl, token),
   }));
   return { ...data, photos };
+}
+
+export interface FavoritePhoto {
+  id: number;
+  filename: string;
+  thumbnailUrl: string;
+  dateTaken: string | null;
+  createdAt: string;
+  isFavorite: true;
+}
+
+export async function fetchFavorites(offset = 0, limit = 50): Promise<{
+  photos: FavoritePhoto[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/favorites?offset=${offset}&limit=${limit}`
+    : `/api/photos/favorites?offset=${offset}&limit=${limit}`;
+
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch favorites: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  const photos: FavoritePhoto[] = (data.photos ?? []).map((p: FavoritePhoto) => ({
+    ...p,
+    thumbnailUrl: buildUrl(p.thumbnailUrl, token),
+  }));
+  return { ...data, photos };
+}
+
+export async function bulkAction(
+  action: 'favorite' | 'unfavorite' | 'delete',
+  photoIds: number[]
+): Promise<{ updated: number; skipped: number; errors: string[] }> {
+  const url = API_BASE ? `${API_BASE}/api/photos/bulk` : `/api/photos/bulk`;
+  const res = await fetchWithAuth(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, photoIds }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(error.error || `Bulk action failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function permanentlyDeletePhotos(photoIds: number[]): Promise<{ deleted: number }> {

@@ -1167,6 +1167,41 @@ app.post("/api/photos/restore", authenticateToken, async (req, res) => {
   }
 });
 
+// ---------------- FAVORITES ----------------
+app.get("/api/photos/favorites", authenticateToken, async (req, res) => {
+  try {
+    const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+
+    const [rows, countRow] = await Promise.all([
+      dbAll(
+        `SELECT id, filename, date_taken, created_at
+         FROM photos
+         WHERE is_favorite = 1 AND is_deleted = 0
+         ORDER BY COALESCE(date_taken, created_at) DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [limit, offset]
+      ),
+      dbGet("SELECT COUNT(*) as total FROM photos WHERE is_favorite = 1 AND is_deleted = 0"),
+    ]);
+
+    const total = countRow?.total ?? 0;
+    const photos = rows.map((r) => ({
+      id: r.id,
+      filename: r.filename,
+      thumbnailUrl: `/thumbnails/${r.id}`,
+      dateTaken: r.date_taken ?? null,
+      createdAt: r.created_at,
+      isFavorite: true,
+    }));
+
+    res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total });
+  } catch (err) {
+    console.error("GET /api/photos/favorites error:", err);
+    res.status(500).json({ error: "Failed to fetch favorites" });
+  }
+});
+
 // ---------------- TRASH (soft-deleted photos) ----------------
 app.get("/api/photos/trash", authenticateToken, async (req, res) => {
   try {

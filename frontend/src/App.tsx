@@ -5,6 +5,7 @@ import {
   fetchPeople,
   fetchPersonPhotos,
   searchPhotos,
+  bulkAction,
   Photo,
   Album,
   Person,
@@ -21,6 +22,8 @@ import { FaceTagModal } from "./components/FaceTagModal";
 import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
 import DuplicatesView from "./components/DuplicatesView";
 import TrashView from "./components/TrashView";
+import FavoritesView from "./components/FavoritesView";
+import { BulkActionBar } from "./components/BulkActionBar";
 import { useAuth } from "./hooks/useAuth";
 
 export default function App() {
@@ -38,6 +41,11 @@ export default function App() {
   const [selectedPhotoForTagging, setSelectedPhotoForTagging] = useState<Photo | null>(null);
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
+
+  // Selection state for gallery
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const selectMode = selectedIds.size > 0;
 
   // 🔍 Search state — input is debounced before triggering search
   const [searchInput, setSearchInput] = useState("");   // raw keystroke value
@@ -202,12 +210,43 @@ export default function App() {
     loadMore();
   }, [user, resetPhotos, loadMore]);
 
-  const openPhoto = useCallback((p: Photo) => {
+  const openPhoto = useCallback((p: Photo, e?: React.MouseEvent) => {
+    // ctrl+click or existing selection → toggle selection
+    if (e?.ctrlKey || e?.metaKey || selectedIds.size > 0) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+        return next;
+      });
+      return;
+    }
     const url = (p as any)?.image_url;
     if (typeof url === "string" && url.length > 0) {
       setModalPhoto({ ...p, image_url: url });
     }
-  }, []);
+  }, [selectedIds.size]);
+
+  const handleBulkAction = useCallback(async (action: 'favorite' | 'unfavorite' | 'delete') => {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    setBulkLoading(true);
+    try {
+      await bulkAction(action, ids);
+      setSelectedIds(new Set());
+      // Reflect changes in local photos list without a full reload
+      if (action === 'favorite') {
+        resetPhotos();
+        loadMore();
+      } else if (action === 'unfavorite') {
+        resetPhotos();
+        loadMore();
+      }
+    } catch (err) {
+      console.error('Bulk action failed', err);
+    } finally {
+      setBulkLoading(false);
+    }
+  }, [selectedIds, resetPhotos, loadMore]);
 
   const openPhotoTagEditor = useCallback((p: Photo) => {
     setSelectedPhotoForTagging(p);
@@ -348,8 +387,21 @@ export default function App() {
 
       return (
         <>
-          <PhotoMasonry photos={photos} onPhotoClick={(p) => openPhoto(p)} groupByDate />
+          <PhotoMasonry
+            photos={photos}
+            onPhotoClick={openPhoto}
+            selectedIds={selectedIds}
+            selectMode={selectMode}
+            groupByDate
+          />
           <div ref={sentinelRef} className="h-10" />
+          <BulkActionBar
+            selectedCount={selectedIds.size}
+            selectedIds={selectedIds}
+            onAction={handleBulkAction}
+            onClear={() => setSelectedIds(new Set())}
+            isLoading={bulkLoading}
+          />
         </>
       );
     }
@@ -393,7 +445,6 @@ export default function App() {
     const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {
       documents:       { emoji: "📄", title: "Documents",               desc: "PDFs, Word docs, and other documents from your photos." },
       screenshots:     { emoji: "🖥️", title: "Screenshots & recordings", desc: "Screenshots and screen recordings will appear here." },
-      favorites:       { emoji: "❤️", title: "Favorites",               desc: "Photos you've marked as favorites will appear here." },
       places:          { emoji: "🗺️", title: "Places",                  desc: "Photos grouped by location will appear here." },
       videos:          { emoji: "🎬", title: "Videos",                  desc: "Your video files will appear here." },
       "recently-added":{ emoji: "🕐", title: "Recently added",          desc: "Photos added in the last 30 days." },
@@ -402,6 +453,7 @@ export default function App() {
     };
 
     if (view === "trash") return <TrashView user={user} />;
+    if (view === "favorites") return <FavoritesView user={user} />;
 
     const placeholder = placeholders[view];
     if (placeholder) {
@@ -463,6 +515,7 @@ export default function App() {
             setSearchInput("");
             setSearchQuery("");
           }
+          setSelectedIds(new Set());
           setView(v);
         }}
         albums={albums}
