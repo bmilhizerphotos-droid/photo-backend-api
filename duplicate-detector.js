@@ -174,17 +174,38 @@ export async function getScanStats() {
   const hashed = await dbGet(
     `SELECT COUNT(*) as c FROM photos WHERE filehash IS NOT NULL AND filehash != ''`
   );
+  // Only count groups that still have >= 2 non-deleted photos
   const dupeGroups = await dbGet(
-    `SELECT COUNT(DISTINCT duplicate_group_id) as c FROM photos WHERE duplicate_group_id IS NOT NULL`
+    `SELECT COUNT(*) as c FROM (
+       SELECT duplicate_group_id FROM photos
+       WHERE duplicate_group_id IS NOT NULL AND is_deleted = 0
+       GROUP BY duplicate_group_id HAVING COUNT(*) >= 2
+     )`
   );
   const dupePhotos = await dbGet(
-    `SELECT COUNT(*) as c FROM photos WHERE duplicate_group_id IS NOT NULL`
+    `SELECT COUNT(*) as c FROM photos
+     WHERE duplicate_group_id IS NOT NULL AND is_deleted = 0
+       AND duplicate_group_id IN (
+         SELECT duplicate_group_id FROM photos
+         WHERE duplicate_group_id IS NOT NULL AND is_deleted = 0
+         GROUP BY duplicate_group_id HAVING COUNT(*) >= 2
+       )`
   );
   const burstGroups = await dbGet(
-    `SELECT COUNT(DISTINCT burst_id) as c FROM photos WHERE burst_id IS NOT NULL`
+    `SELECT COUNT(*) as c FROM (
+       SELECT burst_id FROM photos
+       WHERE burst_id IS NOT NULL AND is_deleted = 0
+       GROUP BY burst_id HAVING COUNT(*) >= 2
+     )`
   );
   const burstPhotos = await dbGet(
-    `SELECT COUNT(*) as c FROM photos WHERE burst_id IS NOT NULL`
+    `SELECT COUNT(*) as c FROM photos
+     WHERE burst_id IS NOT NULL AND is_deleted = 0
+       AND burst_id IN (
+         SELECT burst_id FROM photos
+         WHERE burst_id IS NOT NULL AND is_deleted = 0
+         GROUP BY burst_id HAVING COUNT(*) >= 2
+       )`
   );
   return {
     totalPhotos: total.c,

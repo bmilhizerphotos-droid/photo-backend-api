@@ -948,13 +948,14 @@ app.get("/api/photos/duplicates/stats", authenticateToken, async (_req, res) => 
 });
 
 async function loadGroupPhotos(column, limitCount = 25, offset = 0) {
-  // Fetch one extra to detect hasMore
+  // Only include groups that still have >= 2 non-deleted photos
   const groups = await dbAll(
     `
     SELECT ${column} as groupId, COUNT(*) as count
     FROM photos
-    WHERE ${column} IS NOT NULL
+    WHERE ${column} IS NOT NULL AND is_deleted = 0
     GROUP BY ${column}
+    HAVING COUNT(*) >= 2
     ORDER BY count DESC
     LIMIT ? OFFSET ?
   `,
@@ -971,7 +972,7 @@ async function loadGroupPhotos(column, limitCount = 25, offset = 0) {
     `
     SELECT id, filename, date_taken, width, height, is_deleted, ${column} as groupId
     FROM photos
-    WHERE ${column} IN (${placeholders})
+    WHERE ${column} IN (${placeholders}) AND is_deleted = 0
     ORDER BY ${column}, date_taken ASC, id ASC
   `,
     page.map((g) => g.groupId)
