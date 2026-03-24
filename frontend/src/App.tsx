@@ -732,6 +732,7 @@ export default function App() {
         onClear={() => { setSelectedIds(new Set()); setSelectModeActive(false); }}
         isLoading={bulkLoading}
         selectModeActive={selectMode}
+        onAddToAlbum={() => setShowAddToAlbumModal(true)}
       />
     </div>
   );
