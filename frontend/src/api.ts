@@ -646,7 +646,7 @@ export async function fetchTrash(offset = 0, limit = 50): Promise<{
   const token = await getAuthToken();
   const photos: TrashPhoto[] = (data.photos ?? []).map((p: TrashPhoto) => ({
     ...p,
-    thumbnailUrl: buildUrl(p.thumbnailUrl, token),
+    thumbnailUrl: appendToken(p.thumbnailUrl, token) ?? p.thumbnailUrl,
   }));
   return { ...data, photos };
 }
@@ -677,7 +677,7 @@ export async function fetchFavorites(offset = 0, limit = 50): Promise<{
   const token = await getAuthToken();
   const photos: FavoritePhoto[] = (data.photos ?? []).map((p: FavoritePhoto) => ({
     ...p,
-    thumbnailUrl: buildUrl(p.thumbnailUrl, token),
+    thumbnailUrl: appendToken(p.thumbnailUrl, token) ?? p.thumbnailUrl,
   }));
   return { ...data, photos };
 }
