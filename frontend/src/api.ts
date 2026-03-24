@@ -31,6 +31,10 @@ async function fetchWithAuth(
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
+  // Auto-set JSON content type when body is a serialised string
+  if (typeof options.body === 'string' && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const signal = options.signal ?? AbortSignal.timeout(timeoutMs);
   return fetch(url, { ...options, headers, signal });
 }
