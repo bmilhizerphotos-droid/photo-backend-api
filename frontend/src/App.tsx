@@ -23,6 +23,7 @@ import { FaceTagModal } from "./components/FaceTagModal";
 import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
 import DuplicatesView from "./components/DuplicatesView";
 import DocumentsView from "./components/DocumentsView";
+import ScreenshotsView from "./components/ScreenshotsView";
 import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
 import AlbumsGrid from "./components/AlbumsGrid";
@@ -587,6 +588,7 @@ export default function App() {
     }
 
     if (view === "documents") return <DocumentsView onPhotoClick={(p) => setModalPhoto(p)} />;
+    if (view === "screenshots") return <ScreenshotsView onPhotoClick={(p) => setModalPhoto(p)} />;
 
     // Placeholder views for future features
     const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {

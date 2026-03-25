@@ -22,7 +22,10 @@
     "update-dates:all": "node update-exif-dates.js --all",
     "scan-documents": "node scan-documents.js",
     "scan-documents:test": "node scan-documents.js --limit 50 --dry-run",
-    "scan-documents:all": "node scan-documents.js --all"
+    "scan-documents:all": "node scan-documents.js --all",
+    "scan-screenshots": "node scan-screenshots.js",
+    "scan-screenshots:test": "node scan-screenshots.js --limit 50 --dry-run",
+    "scan-screenshots:all": "node scan-screenshots.js --all"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",

@@ -682,6 +682,47 @@ export async function fetchDocumentScanStatus(): Promise<DocumentScanStatus> {
   return res.json();
 }
 
+// ── Screenshots ────────────────────────────────────────────────────────────
+
+export async function fetchScreenshots(
+  offset = 0,
+  limit = 50
+): Promise<{ photos: Photo[]; total: number; hasMore: boolean; scanned: number }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/screenshots?offset=${offset}&limit=${limit}`
+    : `/api/photos/screenshots?offset=${offset}&limit=${limit}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch screenshots: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return {
+    photos: normalizePhotos(data.photos ?? [], token),
+    total: data.total ?? 0,
+    hasMore: data.hasMore ?? false,
+    scanned: data.scanned ?? 0,
+  };
+}
+
+export async function startScreenshotScan(): Promise<{ started: boolean; message: string }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/scan-screenshots`
+    : `/api/photos/scan-screenshots`;
+  const res = await fetchWithAuth(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to start screenshot scan: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchScreenshotScanStatus(): Promise<{
+  running: boolean; total: number; scanned: number; screenshots: number;
+}> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/screenshots/status`
+    : `/api/photos/screenshots/status`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to get screenshot scan status: ${res.status}`);
+  return res.json();
+}
+
 export async function softDeletePhotos(photoIds: number[]): Promise<void> {
   const url = API_BASE
     ? `${API_BASE}/api/photos/soft-delete`

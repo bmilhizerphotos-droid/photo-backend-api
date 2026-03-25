@@ -76,6 +76,17 @@ app.use(express.json());
   }
   await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_document ON photos(is_document)");
 
+  // Screenshot detection columns
+  for (const sql of [
+    "ALTER TABLE photos ADD COLUMN is_screenshot INTEGER DEFAULT 0",
+    "ALTER TABLE photos ADD COLUMN screenshot_scanned INTEGER DEFAULT 0",
+  ]) {
+    try { await dbRun(sql); } catch (err) {
+      if (!/duplicate column/i.test(err?.message || "")) console.error(sql, err);
+    }
+  }
+  await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_screenshot ON photos(is_screenshot)");
+
   // Albums schema
   await dbRun(`CREATE TABLE IF NOT EXISTS albums (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1514,6 +1525,89 @@ app.get("/api/photos/documents/status", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to get document scan status" });
+  }
+});
+
+// ---------------- SCREENSHOTS ----------------
+app.get("/api/photos/screenshots", authenticateToken, async (req, res) => {
+  try {
+    const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
+
+    const [rows, countRow, scannedRow] = await Promise.all([
+      dbAll(
+        `SELECT id, filename, date_taken, created_at
+         FROM photos
+         WHERE is_screenshot = 1 AND is_deleted = 0
+         ORDER BY COALESCE(date_taken, created_at) DESC, id DESC
+         LIMIT ? OFFSET ?`,
+        [limit, offset]
+      ),
+      dbGet("SELECT COUNT(*) as total FROM photos WHERE is_screenshot = 1 AND is_deleted = 0"),
+      dbGet("SELECT COUNT(*) as scanned FROM photos WHERE screenshot_scanned = 1 AND is_deleted = 0"),
+    ]);
+
+    const total   = countRow?.total   ?? 0;
+    const scanned = scannedRow?.scanned ?? 0;
+    const photos = rows.map((r) => ({
+      id: r.id,
+      filename: r.filename,
+      thumbnailUrl: `/thumbnails/${r.id}`,
+      dateTaken: r.date_taken ?? null,
+      createdAt: r.created_at,
+    }));
+
+    res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total, scanned });
+  } catch (err) {
+    console.error("GET /api/photos/screenshots error:", err);
+    res.status(500).json({ error: "Failed to fetch screenshots" });
+  }
+});
+
+let screenshotScanRunning = false;
+app.post("/api/photos/scan-screenshots", authenticateToken, async (req, res) => {
+  if (screenshotScanRunning) {
+    return res.json({ started: false, message: "Scan already in progress" });
+  }
+  screenshotScanRunning = true;
+  res.json({ started: true, message: "Screenshot scan started" });
+
+  const { spawn } = await import("child_process");
+  const { fileURLToPath } = await import("url");
+  const __scanDir = path.dirname(fileURLToPath(import.meta.url));
+  const scriptPath = path.join(__scanDir, "scan-screenshots.js");
+  const child = spawn(process.execPath, [scriptPath], {
+    stdio: "pipe",
+    cwd: __scanDir,
+    env: { ...process.env },
+  });
+  child.stdout?.on("data", (d) => process.stdout.write("[ss-scan] " + d));
+  child.stderr?.on("data", (d) => process.stderr.write("[ss-scan] " + d));
+  child.on("close", (code) => {
+    console.log(`Screenshot scan finished with code ${code}`);
+    screenshotScanRunning = false;
+  });
+  child.on("error", (err) => {
+    console.error("Screenshot scan process error:", err);
+    screenshotScanRunning = false;
+  });
+});
+
+app.get("/api/photos/screenshots/status", authenticateToken, async (req, res) => {
+  try {
+    const [totalRow, scannedRow, ssRow] = await Promise.all([
+      dbGet("SELECT COUNT(*) as total FROM photos WHERE is_deleted = 0"),
+      dbGet("SELECT COUNT(*) as scanned FROM photos WHERE screenshot_scanned = 1 AND is_deleted = 0"),
+      dbGet("SELECT COUNT(*) as ss FROM photos WHERE is_screenshot = 1 AND is_deleted = 0"),
+    ]);
+    res.json({
+      running: screenshotScanRunning,
+      total: totalRow?.total ?? 0,
+      scanned: scannedRow?.scanned ?? 0,
+      screenshots: ssRow?.ss ?? 0,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to get screenshot scan status" });
   }
 });
 
