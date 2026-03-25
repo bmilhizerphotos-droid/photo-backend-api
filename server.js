@@ -1948,6 +1948,38 @@ app.get("/api/memories", authenticateToken, async (req, res) => {
   }
 });
 
+// ── Search Memories (must be before /:id) ────────
+app.get("/api/memories/search", authenticateToken, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ memories: [] });
+    const like = `%${q}%`;
+    const rows = await dbAll(
+      `SELECT id, title, narrative, location_label, event_date_start, event_date_end,
+              cover_photo_id, photo_count, confidence
+       FROM memories
+       WHERE title LIKE ? OR narrative LIKE ? OR location_label LIKE ?
+       ORDER BY event_date_start DESC LIMIT 50`,
+      [like, like, like]
+    );
+    const memories = rows.map((r) => ({
+      id: r.id, title: r.title, narrative: r.narrative,
+      locationLabel: r.location_label, eventDateStart: r.event_date_start,
+      eventDateEnd: r.event_date_end,
+      coverPhotoUrl: r.cover_photo_id ? `/thumbnails/${r.cover_photo_id}` : null,
+      photoCount: r.photo_count, confidence: r.confidence,
+    }));
+    res.json({ memories });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to search memories" });
+  }
+});
+
+// ── Regenerate Memories (must be before /:id) ────
+app.post("/api/memories/regenerate", authenticateToken, async (req, res) => {
+  res.json({ started: true, message: "Run 'node memory-generator.js' on the server to regenerate memories." });
+});
+
 app.get("/api/memories/:id", authenticateToken, async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -2053,38 +2085,6 @@ app.post("/api/photos/download-zip", authenticateToken, async (req, res) => {
     console.error("POST /api/photos/download-zip error:", err);
     if (!res.headersSent) res.status(500).json({ error: "Failed to create ZIP" });
   }
-});
-
-// ── Search Memories ──────────────────────────────
-app.get("/api/memories/search", authenticateToken, async (req, res) => {
-  try {
-    const q = String(req.query.q || "").trim();
-    if (!q) return res.json({ memories: [] });
-    const like = `%${q}%`;
-    const rows = await dbAll(
-      `SELECT id, title, narrative, location_label, event_date_start, event_date_end,
-              cover_photo_id, photo_count, confidence
-       FROM memories
-       WHERE title LIKE ? OR narrative LIKE ? OR location_label LIKE ?
-       ORDER BY event_date_start DESC LIMIT 50`,
-      [like, like, like]
-    );
-    const memories = rows.map((r) => ({
-      id: r.id, title: r.title, narrative: r.narrative,
-      locationLabel: r.location_label, eventDateStart: r.event_date_start,
-      eventDateEnd: r.event_date_end,
-      coverPhotoUrl: r.cover_photo_id ? `/thumbnails/${r.cover_photo_id}` : null,
-      photoCount: r.photo_count, confidence: r.confidence,
-    }));
-    res.json({ memories });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to search memories" });
-  }
-});
-
-// ── Regenerate Memories ──────────────────────────
-app.post("/api/memories/regenerate", authenticateToken, async (req, res) => {
-  res.json({ started: true, message: "Run 'node memory-generator.js' on the server to regenerate memories." });
 });
 
 // ---------------- START ----------------
