@@ -87,6 +87,26 @@ app.use(express.json());
   }
   await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_screenshot ON photos(is_screenshot)");
 
+  // Phase 1 migrations
+  for (const sql of [
+    "ALTER TABLE photos ADD COLUMN deleted_at DATETIME",
+    "ALTER TABLE people ADD COLUMN birthday DATE",
+  ]) {
+    try { await dbRun(sql); } catch (err) {
+      if (!/duplicate column/i.test(err?.message || "")) console.error(sql, err);
+    }
+  }
+  await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_deleted_at ON photos(deleted_at)");
+
+  // Auto-purge trash older than retention days on startup
+  const TRASH_RETENTION_DAYS = parseInt(process.env.TRASH_RETENTION_DAYS || "30", 10);
+  try {
+    const purged = await dbRun(
+      `DELETE FROM photos WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < datetime('now', '-${TRASH_RETENTION_DAYS} days')`
+    );
+    if (purged?.changes > 0) console.log(`Auto-purged ${purged.changes} photos from trash (>${TRASH_RETENTION_DAYS} days old)`);
+  } catch (err) { console.error("Trash auto-purge failed:", err); }
+
   // Albums schema
   await dbRun(`CREATE TABLE IF NOT EXISTS albums (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1246,8 +1266,10 @@ async function updateDeletedState(photoIds, isDeleted) {
     }
 
     const result = await dbRun(
-      "UPDATE photos SET is_deleted = ? WHERE id = ?",
-      [isDeleted ? 1 : 0, photoId]
+      isDeleted
+        ? "UPDATE photos SET is_deleted = 1, deleted_at = datetime('now') WHERE id = ?"
+        : "UPDATE photos SET is_deleted = 0, deleted_at = NULL WHERE id = ?",
+      [photoId]
     );
     updated += Number(result?.changes || 0);
   }
@@ -1393,13 +1415,14 @@ app.get("/api/photos/trash", authenticateToken, async (req, res) => {
   try {
     const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
     const offset = Math.max(0, Number(req.query.offset || 0));
+    const RETENTION = parseInt(process.env.TRASH_RETENTION_DAYS || "30", 10);
 
     const [rows, countRow] = await Promise.all([
       dbAll(
-        `SELECT id, filename, date_taken, created_at
+        `SELECT id, filename, date_taken, created_at, deleted_at
          FROM photos
          WHERE is_deleted = 1
-         ORDER BY COALESCE(date_taken, created_at) DESC, id DESC
+         ORDER BY deleted_at DESC, COALESCE(date_taken, created_at) DESC, id DESC
          LIMIT ? OFFSET ?`,
         [limit, offset]
       ),
@@ -1407,15 +1430,25 @@ app.get("/api/photos/trash", authenticateToken, async (req, res) => {
     ]);
 
     const total = countRow?.total ?? 0;
-    const photos = rows.map((r) => ({
-      id: r.id,
-      filename: r.filename,
-      thumbnailUrl: `/thumbnails/${r.id}`,
-      dateTaken: r.date_taken ?? null,
-      createdAt: r.created_at,
-    }));
+    const photos = rows.map((r) => {
+      let daysLeft = null;
+      if (r.deleted_at) {
+        const deletedMs = new Date(r.deleted_at).getTime();
+        const expiresMs = deletedMs + RETENTION * 86400000;
+        daysLeft = Math.max(0, Math.ceil((expiresMs - Date.now()) / 86400000));
+      }
+      return {
+        id: r.id,
+        filename: r.filename,
+        thumbnailUrl: `/thumbnails/${r.id}`,
+        dateTaken: r.date_taken ?? null,
+        createdAt: r.created_at,
+        deletedAt: r.deleted_at ?? null,
+        daysLeft,
+      };
+    });
 
-    res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total });
+    res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total, retentionDays: RETENTION });
   } catch (err) {
     console.error("GET /api/photos/trash error:", err);
     res.status(500).json({ error: "Failed to fetch trash" });
@@ -1441,6 +1474,17 @@ app.delete("/api/photos/trash", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("DELETE /api/photos/trash error:", err);
     res.status(500).json({ error: "Failed to permanently delete" });
+  }
+});
+
+// Empty entire trash
+app.post("/api/photos/trash/empty", authenticateToken, async (req, res) => {
+  try {
+    const result = await dbRun("DELETE FROM photos WHERE is_deleted = 1");
+    res.json({ deleted: Number(result?.changes || 0) });
+  } catch (err) {
+    console.error("POST /api/photos/trash/empty error:", err);
+    res.status(500).json({ error: "Failed to empty trash" });
   }
 });
 
@@ -1754,6 +1798,293 @@ app.delete("/api/photos/:photoId/people/:personId", authenticateToken, async (re
     console.error("Failed to remove person tag from photo:", err);
     res.status(500).json({ error: "Failed to remove person tag from photo" });
   }
+});
+
+// ════════════════════════════════════════════════
+// PHASE 1 FEATURES
+// ════════════════════════════════════════════════
+
+// ── On This Day ──────────────────────────────────
+app.get("/api/on-this-day", authenticateToken, async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT id, filename, date_taken, created_at
+       FROM photos
+       WHERE strftime('%m-%d', date_taken) = strftime('%m-%d', 'now')
+         AND date_taken IS NOT NULL
+         AND is_deleted = 0
+       ORDER BY date_taken DESC
+       LIMIT 500`
+    );
+    // Group by year
+    const byYear = {};
+    for (const r of rows) {
+      const year = new Date(r.date_taken).getFullYear();
+      if (!byYear[year]) byYear[year] = [];
+      byYear[year].push({ id: r.id, filename: r.filename, thumbnailUrl: `/thumbnails/${r.id}`, dateTaken: r.date_taken });
+    }
+    const groups = Object.entries(byYear)
+      .sort(([a], [b]) => Number(b) - Number(a))
+      .map(([year, photos]) => ({ year: Number(year), photos }));
+    res.json({ groups, total: rows.length });
+  } catch (err) {
+    console.error("GET /api/on-this-day error:", err);
+    res.status(500).json({ error: "Failed to fetch On This Day" });
+  }
+});
+
+// ── Birthday Reminders ───────────────────────────
+app.get("/api/birthdays/today", authenticateToken, async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT p.id, p.name, p.birthday,
+              ph.id as photo_id, ph.filename
+       FROM people p
+       LEFT JOIN (
+         SELECT pp.person_id, MIN(ph.id) as id, MIN(ph.filename) as filename
+         FROM photo_people pp
+         JOIN photos ph ON ph.id = pp.photo_id
+         WHERE ph.is_deleted = 0
+         GROUP BY pp.person_id
+       ) ph ON ph.person_id = p.id
+       WHERE p.birthday IS NOT NULL
+         AND strftime('%m-%d', p.birthday) = strftime('%m-%d', 'now')`
+    );
+    const birthdays = rows.map((r) => ({
+      personId: r.id,
+      name: r.name,
+      birthday: r.birthday,
+      age: r.birthday ? new Date().getFullYear() - new Date(r.birthday).getFullYear() : null,
+      thumbnailUrl: r.photo_id ? `/thumbnails/${r.photo_id}` : null,
+    }));
+    res.json({ birthdays });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch birthdays" });
+  }
+});
+
+app.get("/api/birthdays/upcoming", authenticateToken, async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, Number(req.query.days || 30)));
+    const rows = await dbAll(
+      `SELECT p.id, p.name, p.birthday,
+              ph.id as photo_id
+       FROM people p
+       LEFT JOIN (
+         SELECT pp.person_id, MIN(ph.id) as id
+         FROM photo_people pp
+         JOIN photos ph ON ph.id = pp.photo_id
+         WHERE ph.is_deleted = 0
+         GROUP BY pp.person_id
+       ) ph ON ph.person_id = p.id
+       WHERE p.birthday IS NOT NULL`
+    );
+    const today = new Date();
+    const upcoming = rows
+      .map((r) => {
+        const bday = new Date(r.birthday);
+        const thisYear = new Date(today.getFullYear(), bday.getMonth(), bday.getDate());
+        if (thisYear < today) thisYear.setFullYear(today.getFullYear() + 1);
+        const daysUntil = Math.ceil((thisYear - today) / 86400000);
+        return { personId: r.id, name: r.name, birthday: r.birthday, daysUntil, thumbnailUrl: r.photo_id ? `/thumbnails/${r.photo_id}` : null };
+      })
+      .filter((r) => r.daysUntil <= days && r.daysUntil >= 0)
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+    res.json({ birthdays: upcoming });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch upcoming birthdays" });
+  }
+});
+
+app.patch("/api/people/:id/birthday", authenticateToken, async (req, res) => {
+  try {
+    const personId = Number(req.params.id);
+    if (!Number.isFinite(personId)) return res.status(400).json({ error: "Invalid person ID" });
+    const { birthday } = req.body ?? {};
+    // Validate date format YYYY-MM-DD
+    if (birthday && !/^\d{4}-\d{2}-\d{2}$/.test(birthday)) {
+      return res.status(400).json({ error: "birthday must be YYYY-MM-DD" });
+    }
+    await dbRun("UPDATE people SET birthday = ? WHERE id = ?", [birthday ?? null, personId]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update birthday" });
+  }
+});
+
+// ── Memories API ─────────────────────────────────
+app.get("/api/memories", authenticateToken, async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT id, title, narrative, location_label, event_date_start, event_date_end,
+              cover_photo_id, photo_count, confidence, created_at, updated_at
+       FROM memories
+       ORDER BY event_date_start DESC`
+    );
+    const token = await (async () => {
+      try {
+        const auth = req.headers.authorization;
+        return auth?.startsWith("Bearer ") ? auth.slice(7) : null;
+      } catch { return null; }
+    })();
+    const memories = rows.map((r) => ({
+      id: r.id,
+      title: r.title ?? null,
+      narrative: r.narrative ?? null,
+      locationLabel: r.location_label ?? null,
+      eventDateStart: r.event_date_start,
+      eventDateEnd: r.event_date_end,
+      coverPhotoId: r.cover_photo_id,
+      coverPhotoUrl: r.cover_photo_id ? `/thumbnails/${r.cover_photo_id}` : null,
+      photoCount: r.photo_count ?? 0,
+      confidence: r.confidence ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+    res.json({ memories });
+  } catch (err) {
+    console.error("GET /api/memories error:", err);
+    res.status(500).json({ error: "Failed to fetch memories" });
+  }
+});
+
+app.get("/api/memories/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const row = await dbGet(
+      `SELECT id, title, narrative, location_label, event_date_start, event_date_end,
+              cover_photo_id, photo_count, confidence, created_at, updated_at
+       FROM memories WHERE id = ?`, [id]
+    );
+    if (!row) return res.status(404).json({ error: "Memory not found" });
+    res.json({
+      id: row.id, title: row.title, narrative: row.narrative,
+      locationLabel: row.location_label, eventDateStart: row.event_date_start,
+      eventDateEnd: row.event_date_end, coverPhotoId: row.cover_photo_id,
+      coverPhotoUrl: row.cover_photo_id ? `/thumbnails/${row.cover_photo_id}` : null,
+      photoCount: row.photo_count, confidence: row.confidence,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch memory" });
+  }
+});
+
+app.get("/api/memories/:id/photos", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const rows = await dbAll(
+      `SELECT p.id, p.filename, p.date_taken, p.full_path
+       FROM photos p
+       JOIN memory_photos mp ON mp.photo_id = p.id
+       WHERE mp.memory_id = ? AND p.is_deleted = 0
+       ORDER BY COALESCE(p.date_taken, p.created_at) ASC`, [id]
+    );
+    const photos = rows.map((r) => ({
+      id: r.id, filename: r.filename, dateTaken: r.date_taken,
+      thumbnailUrl: `/thumbnails/${r.id}`,
+      imageUrl: `/api/photos/${r.id}/file`,
+    }));
+    res.json({ photos });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch memory photos" });
+  }
+});
+
+app.delete("/api/memories/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await dbRun("DELETE FROM memory_photos WHERE memory_id = ?", [id]);
+    await dbRun("DELETE FROM memories WHERE id = ?", [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete memory" });
+  }
+});
+
+app.put("/api/memories/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { title, narrative, locationLabel } = req.body ?? {};
+    await dbRun(
+      `UPDATE memories SET title = ?, narrative = ?, location_label = ?, updated_at = datetime('now') WHERE id = ?`,
+      [title ?? null, narrative ?? null, locationLabel ?? null, id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update memory" });
+  }
+});
+
+// ── Bulk Download ZIP ─────────────────────────────
+app.post("/api/photos/download-zip", authenticateToken, async (req, res) => {
+  try {
+    const { photoIds } = req.body ?? {};
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({ error: "photoIds required" });
+    }
+    const ids = photoIds.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) return res.status(400).json({ error: "No valid photoIds" });
+    if (ids.length > 500) return res.status(400).json({ error: "Max 500 photos per download" });
+
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = await dbAll(
+      `SELECT id, filename, full_path FROM photos WHERE id IN (${placeholders}) AND is_deleted = 0`,
+      ids
+    );
+
+    const archiver = (await import("archiver")).default;
+    const archive = archiver("zip", { zlib: { level: 0 } }); // level 0 = store, fastest
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="photos.zip"`);
+    archive.pipe(res);
+
+    const photoRoot = path.resolve(PHOTO_ROOT);
+    for (const row of rows) {
+      const filePath = path.resolve(row.full_path || "");
+      // Security: must be within PHOTO_ROOT
+      if (!filePath.startsWith(photoRoot)) continue;
+      if (!fs.existsSync(filePath)) continue;
+      archive.file(filePath, { name: row.filename });
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error("POST /api/photos/download-zip error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Failed to create ZIP" });
+  }
+});
+
+// ── Search Memories ──────────────────────────────
+app.get("/api/memories/search", authenticateToken, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ memories: [] });
+    const like = `%${q}%`;
+    const rows = await dbAll(
+      `SELECT id, title, narrative, location_label, event_date_start, event_date_end,
+              cover_photo_id, photo_count, confidence
+       FROM memories
+       WHERE title LIKE ? OR narrative LIKE ? OR location_label LIKE ?
+       ORDER BY event_date_start DESC LIMIT 50`,
+      [like, like, like]
+    );
+    const memories = rows.map((r) => ({
+      id: r.id, title: r.title, narrative: r.narrative,
+      locationLabel: r.location_label, eventDateStart: r.event_date_start,
+      eventDateEnd: r.event_date_end,
+      coverPhotoUrl: r.cover_photo_id ? `/thumbnails/${r.cover_photo_id}` : null,
+      photoCount: r.photo_count, confidence: r.confidence,
+    }));
+    res.json({ memories });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to search memories" });
+  }
+});
+
+// ── Regenerate Memories ──────────────────────────
+app.post("/api/memories/regenerate", authenticateToken, async (req, res) => {
+  res.json({ started: true, message: "Run 'node memory-generator.js' on the server to regenerate memories." });
 });
 
 // ---------------- START ----------------

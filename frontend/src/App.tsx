@@ -26,11 +26,16 @@ import DocumentsView from "./components/DocumentsView";
 import ScreenshotsView from "./components/ScreenshotsView";
 import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
+import OnThisDayView from "./components/OnThisDayView";
+import BirthdayBanner from "./components/BirthdayBanner";
+import MemorySlideshow from "./components/MemorySlideshow";
+import MemoriesGrid from "./components/MemoriesGrid";
 import AlbumsGrid from "./components/AlbumsGrid";
 import CreateAlbumModal from "./components/CreateAlbumModal";
 import AddToAlbumModal from "./components/AddToAlbumModal";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { useAuth } from "./hooks/useAuth";
+import { Memory } from "./api";
 
 export default function App() {
   const { user, loading: authLoading, error: authError, signIn, signOut } = useAuth();
@@ -61,6 +66,9 @@ export default function App() {
   const [selectedPhotoForTagging, setSelectedPhotoForTagging] = useState<Photo | null>(null);
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
+
+  // Memory slideshow
+  const [slideshowMemory, setSlideshowMemory] = useState<Memory | null>(null);
 
   // Selection state for gallery
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -587,6 +595,10 @@ export default function App() {
       );
     }
 
+    if (view === "on-this-day") return <OnThisDayView />;
+    if (view === "memories") return (
+      <MemoriesGrid onSelectMemory={(memory) => setSlideshowMemory(memory)} />
+    );
     if (view === "documents") return <DocumentsView onPhotoClick={(p) => setModalPhoto(p)} />;
     if (view === "screenshots") return <ScreenshotsView onPhotoClick={(p) => setModalPhoto(p)} />;
 
@@ -678,6 +690,7 @@ export default function App() {
       />
 
       <main className="flex-1 p-4 overflow-y-auto">
+        <BirthdayBanner />
         <div className="mb-4 flex items-center justify-end gap-3">
           <div className="text-sm text-gray-500">{user.email}</div>
           <button
@@ -727,6 +740,14 @@ export default function App() {
           alert(`Added to "${albumName}"`);
         }}
       />
+
+      {/* Memory slideshow overlay */}
+      {slideshowMemory && (
+        <MemorySlideshow
+          memory={slideshowMemory}
+          onClose={() => setSlideshowMemory(null)}
+        />
+      )}
 
       {/* Bulk action bar — fixed to viewport bottom, shown whenever select mode is active */}
       <BulkActionBar
