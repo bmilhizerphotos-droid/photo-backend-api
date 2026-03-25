@@ -12,19 +12,27 @@
  *   node scan-documents.js --dry-run   # show what would be marked, no writes
  */
 
-import "dotenv/config";
+// Load .env manually (dotenv is not installed as a dep)
+import { readFileSync } from "fs";
+try {
+  const envText = readFileSync(new URL(".env", import.meta.url), "utf8");
+  for (const line of envText.split(/\r?\n/)) {
+    const m = line.match(/^([^#=\s][^=]*?)=(.*)$/);
+    if (m) process.env[m[1].trim()] = m[2].trim().replace(/^["']|["']$/g, "");
+  }
+} catch {}
+
 import path from "path";
 import fs from "fs";
-import fetch from "node-fetch";
 import { db, dbRun, dbAll } from "./db.js";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-// gemini-2.0-flash-lite = FREE tier (30 RPM, 1500 RPD, no billing required)
+// gemini-2.5-flash = FREE tier (10 RPM, 500 RPD on free, no billing required)
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 const THUMB_DIR = path.resolve("thumb-cache");
-const BATCH_SIZE = 8;   // photos per request (8 images × ~1KB each = well within limits)
-const DELAY_MS = 2100;  // 2.1s between batches → ~28 req/min (free tier cap: 30 RPM)
+const BATCH_SIZE = 8;   // photos per request
+const DELAY_MS = 7000;  // 7s between batches → ~8 req/min (safely under free tier cap)
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
@@ -109,13 +117,14 @@ async function classifyBatch(photos) {
 
   let text = "";
   try {
-    const res = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+    const res = await globalThis.fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     const data = await res.json();
     text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (data?.error) console.warn("Gemini error:", data.error.message);
   } catch (err) {
     console.warn("Gemini batch error:", err.message);
     return photos.map(() => false);

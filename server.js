@@ -597,7 +597,7 @@ async function expandQueryWithGemini(query) {
 
   try {
     const resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1478,19 +1478,24 @@ app.post("/api/photos/scan-documents", authenticateToken, async (req, res) => {
   res.json({ started: true, message: "Document scan started" });
 
   // Run in background as a child process so it doesn't block the server
-  import("child_process").then(({ spawn }) => {
-    const child = spawn(process.execPath, ["scan-documents.js"], {
-      stdio: "inherit",
-      env: { ...process.env },
-    });
-    child.on("close", (code) => {
-      console.log(`Document scan finished with code ${code}`);
-      documentScanRunning = false;
-    });
-    child.on("error", (err) => {
-      console.error("Document scan process error:", err);
-      documentScanRunning = false;
-    });
+  const { spawn } = await import("child_process");
+  const { fileURLToPath } = await import("url");
+  const __scanDir = path.dirname(fileURLToPath(import.meta.url));
+  const scriptPath = path.join(__scanDir, "scan-documents.js");
+  const child = spawn(process.execPath, [scriptPath], {
+    stdio: "pipe",
+    cwd: __scanDir,
+    env: { ...process.env },
+  });
+  child.stdout?.on("data", (d) => process.stdout.write("[doc-scan] " + d));
+  child.stderr?.on("data", (d) => process.stderr.write("[doc-scan] " + d));
+  child.on("close", (code) => {
+    console.log(`Document scan finished with code ${code}`);
+    documentScanRunning = false;
+  });
+  child.on("error", (err) => {
+    console.error("Document scan process error:", err);
+    documentScanRunning = false;
   });
 });
 
