@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Person, bulkTagPhotos, fetchPeople } from '../api';
+import { Person, bulkTagPhotos, fetchPeople, downloadPhotosAsZip } from '../api';
 import { PersonTagPicker } from './PersonTagPicker';
 
 type BulkAction = 'favorite' | 'unfavorite' | 'add_to_album' | 'delete' | 'tag_person';
@@ -17,6 +17,7 @@ type Props = {
 export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, isLoading = false, onAddToAlbum, selectModeActive = false }: Props) {
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [tagLoading, setTagLoading] = useState(false);
+  const [zipLoading, setZipLoading] = useState(false);
 
   const handleFavorite = async () => {
     await onAction('favorite');
@@ -35,6 +36,22 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
   const handleAddToAlbum = () => {
     if (onAddToAlbum) {
       onAddToAlbum();
+    }
+  };
+
+  const handleDownloadZip = async () => {
+    if (selectedCount === 0) return;
+    if (selectedCount > 500) {
+      alert("Max 500 photos per download. Please select fewer photos.");
+      return;
+    }
+    setZipLoading(true);
+    try {
+      await downloadPhotosAsZip(Array.from(selectedIds));
+    } catch (err) {
+      alert(`Download failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setZipLoading(false);
     }
   };
 
@@ -97,6 +114,16 @@ export function BulkActionBar({ selectedCount, selectedIds, onAction, onClear, i
               >
                 <span>📁</span>
                 <span>Add to Album</span>
+              </button>
+
+              {/* Download ZIP */}
+              <button
+                onClick={handleDownloadZip}
+                disabled={isLoading || zipLoading || selectedCount === 0}
+                className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                <span>{zipLoading ? "⏳" : "⬇️"}</span>
+                <span>{zipLoading ? "Zipping…" : "Download"}</span>
               </button>
 
               {/* Tag Person */}

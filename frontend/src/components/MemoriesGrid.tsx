@@ -3,7 +3,7 @@ import { fetchMemories, searchMemories, regenerateMemoriesApi, deleteMemory, Mem
 import MemoryEditModal from './MemoryEditModal';
 
 interface MemoriesGridProps {
-  onSelectMemory: (memoryId: number) => void;
+  onSelectMemory: (memory: Memory) => void;
 }
 
 function formatDateRange(start: string, end: string): string {
@@ -254,7 +254,7 @@ export default function MemoriesGrid({ onSelectMemory }: MemoriesGridProps) {
           }).map(memory => (
             <div
               key={memory.id}
-              onClick={() => onSelectMemory(memory.id)}
+              onClick={() => onSelectMemory(memory)}
               className="group relative bg-white rounded-lg shadow-md overflow-hidden cursor-pointer hover:shadow-lg transition-shadow"
             >
               {/* Cover photo */}

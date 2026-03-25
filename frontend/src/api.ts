@@ -855,3 +855,213 @@ export async function permanentlyDeletePhotos(photoIds: number[]): Promise<{ del
   }
   return res.json();
 }
+
+// ── Empty Trash ─────────────────────────────────
+export async function emptyTrash(): Promise<{ deleted: number }> {
+  const url = API_BASE ? `${API_BASE}/api/photos/trash/empty` : `/api/photos/trash/empty`;
+  const res = await fetchWithAuth(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to empty trash: ${res.status}`);
+  return res.json();
+}
+
+// ── On This Day ─────────────────────────────────
+export interface OnThisDayGroup {
+  year: number;
+  photos: { id: number; filename: string; thumbnailUrl: string; dateTaken: string }[];
+}
+
+export async function fetchOnThisDay(): Promise<{ groups: OnThisDayGroup[]; total: number }> {
+  const url = API_BASE ? `${API_BASE}/api/on-this-day` : `/api/on-this-day`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch On This Day: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  const groups: OnThisDayGroup[] = (data.groups ?? []).map((g: any) => ({
+    year: g.year,
+    photos: (g.photos ?? []).map((p: any) => ({
+      ...p,
+      thumbnailUrl: appendToken(withApiBase(p.thumbnailUrl), token) ?? p.thumbnailUrl,
+    })),
+  }));
+  return { groups, total: data.total ?? 0 };
+}
+
+// ── Birthdays ───────────────────────────────────
+export interface Birthday {
+  personId: number;
+  name: string;
+  birthday: string;
+  age: number | null;
+  thumbnailUrl: string | null;
+  daysUntil?: number;
+}
+
+export async function fetchBirthdaysToday(): Promise<{ birthdays: Birthday[] }> {
+  const url = API_BASE ? `${API_BASE}/api/birthdays/today` : `/api/birthdays/today`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch birthdays: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return {
+    birthdays: (data.birthdays ?? []).map((b: Birthday) => ({
+      ...b,
+      thumbnailUrl: b.thumbnailUrl ? appendToken(withApiBase(b.thumbnailUrl), token) : null,
+    })),
+  };
+}
+
+export async function fetchUpcomingBirthdays(days = 30): Promise<{ birthdays: Birthday[] }> {
+  const url = API_BASE ? `${API_BASE}/api/birthdays/upcoming?days=${days}` : `/api/birthdays/upcoming?days=${days}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch upcoming birthdays: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return {
+    birthdays: (data.birthdays ?? []).map((b: Birthday) => ({
+      ...b,
+      thumbnailUrl: b.thumbnailUrl ? appendToken(withApiBase(b.thumbnailUrl), token) : null,
+    })),
+  };
+}
+
+export async function updatePersonBirthday(personId: number, birthday: string | null): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/people/${personId}/birthday` : `/api/people/${personId}/birthday`;
+  const res = await fetchWithAuth(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ birthday }),
+  });
+  if (!res.ok) throw new Error(`Failed to update birthday: ${res.status}`);
+}
+
+// ── Memories ────────────────────────────────────
+export interface Memory {
+  id: number;
+  title: string | null;
+  narrative: string | null;
+  locationLabel: string | null;
+  eventDateStart: string;
+  eventDateEnd: string;
+  coverPhotoId: number | null;
+  coverPhotoUrl: string | null;
+  photoCount: number;
+  confidence: number | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MemoryPhoto {
+  id: number;
+  filename: string;
+  dateTaken: string | null;
+  thumbnailUrl: string;
+  imageUrl: string;
+}
+
+export async function fetchMemories(): Promise<Memory[]> {
+  const url = API_BASE ? `${API_BASE}/api/memories` : `/api/memories`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch memories: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return (data.memories ?? []).map((m: Memory) => ({
+    ...m,
+    coverPhotoUrl: m.coverPhotoUrl ? appendToken(withApiBase(m.coverPhotoUrl), token) : null,
+  }));
+}
+
+export async function searchMemories(q: string): Promise<Memory[]> {
+  const url = API_BASE
+    ? `${API_BASE}/api/memories/search?q=${encodeURIComponent(q)}`
+    : `/api/memories/search?q=${encodeURIComponent(q)}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to search memories: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return (data.memories ?? []).map((m: Memory) => ({
+    ...m,
+    coverPhotoUrl: m.coverPhotoUrl ? appendToken(withApiBase(m.coverPhotoUrl), token) : null,
+  }));
+}
+
+export async function fetchMemoryPhotos(memoryId: number): Promise<MemoryPhoto[]> {
+  const url = API_BASE
+    ? `${API_BASE}/api/memories/${memoryId}/photos`
+    : `/api/memories/${memoryId}/photos`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch memory photos: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return (data.photos ?? []).map((p: MemoryPhoto) => ({
+    ...p,
+    thumbnailUrl: appendToken(withApiBase(p.thumbnailUrl), token) ?? p.thumbnailUrl,
+    imageUrl: appendToken(withApiBase(p.imageUrl), token) ?? p.imageUrl,
+  }));
+}
+
+export async function deleteMemory(memoryId: number): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/memories/${memoryId}` : `/api/memories/${memoryId}`;
+  const res = await fetchWithAuth(url, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete memory: ${res.status}`);
+}
+
+export async function updateMemory(memoryId: number, updates: { title?: string; narrative?: string; locationLabel?: string }): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/memories/${memoryId}` : `/api/memories/${memoryId}`;
+  const res = await fetchWithAuth(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) throw new Error(`Failed to update memory: ${res.status}`);
+}
+
+export async function regenerateMemoriesApi(): Promise<{ started: boolean; message: string }> {
+  const url = API_BASE ? `${API_BASE}/api/memories/regenerate` : `/api/memories/regenerate`;
+  const res = await fetchWithAuth(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to regenerate memories: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchMemory(memoryId: number): Promise<{ memory: Memory; photos: Photo[] }> {
+  const url = API_BASE ? `${API_BASE}/api/memories/${memoryId}` : `/api/memories/${memoryId}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch memory: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  const photos = (data.photos ?? []).map((p: Photo) => ({
+    ...p,
+    thumbnail_url: appendToken(withApiBase(p.thumbnail_url), token) ?? p.thumbnail_url,
+    image_url: appendToken(withApiBase(p.image_url), token) ?? p.image_url,
+  }));
+  return { memory: data.memory ?? data, photos };
+}
+
+export async function generateMemoryNarrative(memoryId: number): Promise<{ title?: string; narrative?: string; locationLabel?: string }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/memories/${memoryId}/generate`
+    : `/api/memories/${memoryId}/generate`;
+  const res = await fetchWithAuth(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to generate narrative: ${res.status}`);
+  return res.json();
+}
+
+// ── Bulk Download ZIP ────────────────────────────
+export async function downloadPhotosAsZip(photoIds: number[]): Promise<void> {
+  const url = API_BASE ? `${API_BASE}/api/photos/download-zip` : `/api/photos/download-zip`;
+  const token = await getAuthToken();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ photoIds }),
+  });
+  if (!res.ok) throw new Error(`Failed to download ZIP: ${res.status}`);
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "photos.zip";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}

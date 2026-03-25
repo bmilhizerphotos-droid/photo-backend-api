@@ -3,6 +3,7 @@ import {
   fetchTrash,
   restorePhotos,
   permanentlyDeletePhotos,
+  emptyTrash,
   TrashPhoto,
 } from "../api";
 
@@ -21,7 +22,9 @@ export default function TrashView({ user }: Props) {
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
   const [confirmPermanent, setConfirmPermanent] = useState(false);
+  const [confirmEmpty, setConfirmEmpty] = useState(false);
   const [selectAll, setSelectAll] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(30);
 
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
@@ -41,6 +44,7 @@ export default function TrashView({ user }: Props) {
       const result = await fetchTrash(offsetRef.current, 50);
       setPhotos((prev) => reset ? result.photos : [...prev, ...result.photos]);
       setTotal(result.total);
+      if ((result as any).retentionDays) setRetentionDays((result as any).retentionDays);
       offsetRef.current += result.photos.length;
       hasMoreRef.current = result.hasMore;
       setHasMore(result.hasMore);
@@ -109,6 +113,22 @@ export default function TrashView({ user }: Props) {
     }
   }
 
+  async function handleEmptyTrash() {
+    setActionLoading(true);
+    setConfirmEmpty(false);
+    try {
+      const result = await emptyTrash();
+      setMessage({ text: `Emptied trash — ${result.deleted} photo${result.deleted !== 1 ? "s" : ""} permanently removed.`, type: "success" });
+      setSelected(new Set());
+      setSelectAll(false);
+      await load(true);
+    } catch (err) {
+      setMessage({ text: err instanceof Error ? err.message : "Empty trash failed", type: "error" });
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function handlePermanentDelete() {
     const ids = Array.from(selected);
     if (!ids.length) return;
@@ -140,8 +160,19 @@ export default function TrashView({ user }: Props) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-semibold text-gray-800">Trash</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{total.toLocaleString()} deleted photo{total !== 1 ? "s" : ""}</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {total.toLocaleString()} deleted photo{total !== 1 ? "s" : ""} · Auto-deleted after {retentionDays} days
+          </p>
         </div>
+        {photos.length > 0 && (
+          <button
+            onClick={() => setConfirmEmpty(true)}
+            disabled={actionLoading}
+            className="px-3 py-1.5 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50 disabled:opacity-50"
+          >
+            Empty Trash
+          </button>
+        )}
       </div>
 
       {/* Message banner */}
@@ -220,6 +251,22 @@ export default function TrashView({ user }: Props) {
         </div>
       )}
 
+      {/* Empty Trash confirm */}
+      {confirmEmpty && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4 shadow-xl">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">Empty Trash?</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              This will permanently remove all {total.toLocaleString()} photo{total !== 1 ? "s" : ""} in the trash from the database. Files on disk are not touched.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setConfirmEmpty(false)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+              <button onClick={handleEmptyTrash} className="px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700">Empty Trash</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Grid */}
       {loading ? (
         <div className="flex items-center justify-center h-48 text-gray-400">Loading trash…</div>
@@ -258,6 +305,12 @@ export default function TrashView({ user }: Props) {
                     </svg>
                   )}
                 </div>
+                {/* Days left badge */}
+                {(photo as any).daysLeft != null && (photo as any).daysLeft <= 7 && (
+                  <div className="absolute top-1 right-1 bg-red-500 text-white text-[9px] font-bold px-1 py-0.5 rounded leading-none">
+                    {(photo as any).daysLeft}d
+                  </div>
+                )}
                 {/* Date tooltip */}
                 <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs px-1 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity truncate">
                   {formatDate(photo)}
