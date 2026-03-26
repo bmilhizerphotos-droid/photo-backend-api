@@ -780,7 +780,7 @@ export async function fetchTrash(offset = 0, limit = 50): Promise<{
     ? `${API_BASE}/api/photos/trash?offset=${offset}&limit=${limit}`
     : `/api/photos/trash?offset=${offset}&limit=${limit}`;
 
-  const res = await fetchWithAuth(url);
+  const res = await fetchWithAuth(url, {}, 30000);
   if (!res.ok) throw new Error(`Failed to fetch trash: ${res.status}`);
   const data = await res.json();
   const token = await getAuthToken();

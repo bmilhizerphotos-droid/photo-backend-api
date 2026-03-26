@@ -97,6 +97,7 @@ app.use(express.json());
     }
   }
   await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_deleted_at ON photos(deleted_at)");
+  await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_deleted ON photos(is_deleted, deleted_at DESC)");
 
   // Auto-purge trash older than retention days on startup
   const TRASH_RETENTION_DAYS = parseInt(process.env.TRASH_RETENTION_DAYS || "30", 10);
