@@ -25,13 +25,18 @@
     "scan-documents:all": "node scan-documents.js --all",
     "scan-screenshots": "node scan-screenshots.js",
     "scan-screenshots:test": "node scan-screenshots.js --limit 50 --dry-run",
-    "scan-screenshots:all": "node scan-screenshots.js --all"
+    "scan-screenshots:all": "node scan-screenshots.js --all",
+    "regen-memories": "node regenerate-memories.js",
+    "regen-memories:test": "node regenerate-memories.js --test=3",
+    "regen-memories:batch": "node regenerate-memories.js --limit=100",
+    "regen-memories:force": "node regenerate-memories.js --force"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-cpu": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
     "@vladmandic/face-api": "^1.7.15",
+    "archiver": "^7.0.1",
     "canvas": "^2.11.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",

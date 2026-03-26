@@ -5,13 +5,51 @@
  */
 
 import { dbRun, dbAll, dbGet, dbBegin, dbCommit, dbRollback } from "./db.js";
-import { generateNarrative } from "./gemini-narrative.js";
+import { generateNarrative, generateNarrativeWithVision } from "./gemini-narrative.js";
 
 const TIME_GAP_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DIST_THRESHOLD_KM = 30;
 const MIN_PHOTOS = 3;
 const MAX_PHOTOS_PER_MEMORY = 200;
-const NARRATIVE_DELAY_MS = 1500; // 1.5s between Gemini calls (safe under 15 RPM)
+const NARRATIVE_DELAY_MS = 7000;  // 7s between Gemini calls — safe under 10 RPM free tier
+const GEOCODE_DELAY_MS = 1200;    // Nominatim: max 1 req/sec, use 1.2s to be safe
+
+// ── Reverse Geocoding (Nominatim / OpenStreetMap, free) ─────────────────────
+const geocodeCache = new Map(); // "lat2,lng2" → "City, State"
+
+async function reverseGeocode(lat, lng) {
+  if (lat == null || lng == null) return null;
+  const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  if (geocodeCache.has(key)) return geocodeCache.get(key);
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "FamilyPhotoApp/1.0 (family-photo-gallery)" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) { geocodeCache.set(key, null); return null; }
+    const data = await res.json();
+    const addr = data.address || {};
+    const city = addr.city || addr.town || addr.village || addr.county || null;
+    const state = addr.state || null;
+    const label = city && state ? `${city}, ${state}` : city || state || null;
+    geocodeCache.set(key, label);
+    return label;
+  } catch {
+    geocodeCache.set(key, null);
+    return null;
+  }
+}
+
+// ── Representative Photo Selection ──────────────────────────────────────────
+function selectRepresentativePhotos(event, n = 4) {
+  if (event.length <= n) return event;
+  const step = (event.length - 1) / (n - 1);
+  const selected = new Set();
+  for (let i = 0; i < n; i++) selected.add(Math.round(i * step));
+  return [...selected].map((i) => event[i]);
+}
 
 /**
  * Haversine distance between two GPS coordinates in km
@@ -169,7 +207,8 @@ async function createMemoryRecord(event) {
     centerLng = gpsPhotos.reduce((s, p) => s + p.gps_lng, 0) / gpsPhotos.length;
   }
 
-  const coverPhotoId = event[0].id;
+  // Use middle photo as cover — more representative than first photo
+  const coverPhotoId = event[Math.floor(event.length / 2)].id;
   const confidence = await computeConfidence(event);
 
   try {
@@ -232,10 +271,10 @@ async function gatherMetadata(memoryId) {
   );
 
   const fileRows = await dbAll(
-    `SELECT p.filename FROM photos p
+    `SELECT p.filename, p.full_path FROM photos p
      JOIN memory_photos mp ON p.id = mp.photo_id
-     WHERE mp.memory_id = ?
-     LIMIT 10`,
+     WHERE mp.memory_id = ? AND p.full_path IS NOT NULL AND p.full_path != ''
+     LIMIT 20`,
     [memoryId]
   );
 
@@ -264,6 +303,7 @@ async function gatherMetadata(memoryId) {
     centerLng: memory.center_lng,
     photoCount: memory.photo_count,
     filenames: fileRows.map((f) => f.filename),
+    photoPaths: fileRows.map((f) => f.full_path).filter(Boolean),
     people: people.map((p) => p.name),
     tags: tags.map((t) => t.name),
     season: getSeason(startDate),
@@ -310,25 +350,33 @@ async function applyTagsToMemory(memoryId, aiTags) {
  * Enrich a single memory with AI-generated title, narrative, location, and tags.
  * Returns true on success (including fallback).
  */
-async function enrichMemory(memoryId) {
+async function enrichMemory(memoryId, geocodeDelay = false) {
   const metadata = await gatherMetadata(memoryId);
   if (!metadata) return false;
 
-  const result = await generateNarrative(metadata);
+  // Pre-fetch location label from Nominatim (free reverse geocoding)
+  let locationLabel = null;
+  if (metadata.centerLat != null) {
+    if (geocodeDelay) await new Promise((r) => setTimeout(r, GEOCODE_DELAY_MS));
+    locationLabel = await reverseGeocode(metadata.centerLat, metadata.centerLng);
+  }
+
+  // Use vision if we have photo file paths, otherwise fall back to text-only
+  const result = metadata.photoPaths?.length > 0
+    ? await generateNarrativeWithVision(metadata, metadata.photoPaths, locationLabel)
+    : await generateNarrative({ ...metadata, locationLabel });
 
   const title = result.title || `Photos from ${new Date(metadata.eventDateStart).toLocaleDateString()}`;
   const narrative = result.narrative || null;
-  const locationLabel = result.locationLabel || null;
+  const finalLocation = result.locationLabel || locationLabel || null;
 
   await dbRun(
     `UPDATE memories SET title = ?, narrative = ?, location_label = ?, updated_at = datetime('now')
      WHERE id = ?`,
-    [title, narrative, locationLabel, memoryId]
+    [title, narrative, finalLocation, memoryId]
   );
 
-  // Apply AI-generated tags to photos in this memory
   await applyTagsToMemory(memoryId, result.tags);
-
   return true;
 }
 
@@ -385,7 +433,7 @@ export async function generateMemories() {
 
 /**
  * Generate Gemini narratives for memories that don't have titles yet.
- * Processes up to 10 memories per run.
+ * Processes up to 10 memories per run (for incremental use).
  * Returns number of narratives generated.
  */
 export async function generateNarratives() {
@@ -396,11 +444,10 @@ export async function generateNarratives() {
   let generated = 0;
   for (let i = 0; i < memories.length; i++) {
     try {
-      const ok = await enrichMemory(memories[i].id);
+      const ok = await enrichMemory(memories[i].id, true);
       if (ok) generated++;
     } catch (err) {
       console.error(`Failed to enrich memory ${memories[i].id}:`, err.message);
-      // Fallback title so we don't retry endlessly
       const mem = await dbGet(`SELECT event_date_start FROM memories WHERE id = ?`, [memories[i].id]);
       const fallbackTitle = `Photos from ${new Date(mem?.event_date_start || Date.now()).toLocaleDateString()}`;
       await dbRun(`UPDATE memories SET title = ?, updated_at = datetime('now') WHERE id = ?`, [fallbackTitle, memories[i].id]);
@@ -458,26 +505,29 @@ export async function regenerateAllMemories() {
   }
   console.log(`✅ Created ${memoryIds.length} memories.`);
 
-  // Step 4: Enrich ALL memories with AI (no cap)
-  console.log(`🧠 Enriching ${memoryIds.length} memories with AI...`);
+  // Step 4: Enrich ALL memories with AI (vision + Nominatim)
+  const etaMins = Math.round((memoryIds.length * NARRATIVE_DELAY_MS) / 60000);
+  console.log(`🧠 Enriching ${memoryIds.length} memories with Gemini Vision + Nominatim (~${etaMins} min)...`);
   let enriched = 0;
   for (let i = 0; i < memoryIds.length; i++) {
     const memoryId = memoryIds[i];
     try {
-      const ok = await enrichMemory(memoryId);
+      const ok = await enrichMemory(memoryId, true);
       if (ok) {
         enriched++;
-        console.log(`  ✅ [${i + 1}/${memoryIds.length}] Memory ${memoryId} enriched.`);
+        if ((i + 1) % 10 === 0 || i === 0) {
+          const elapsed = Math.round((i + 1) * NARRATIVE_DELAY_MS / 60000);
+          const remaining = Math.round((memoryIds.length - i - 1) * NARRATIVE_DELAY_MS / 60000);
+          console.log(`  ✅ [${i + 1}/${memoryIds.length}] ~${elapsed}min elapsed, ~${remaining}min remaining`);
+        }
       }
     } catch (err) {
       console.error(`  ❌ [${i + 1}/${memoryIds.length}] Memory ${memoryId} failed:`, err.message);
-      // Set fallback title
       const mem = await dbGet(`SELECT event_date_start FROM memories WHERE id = ?`, [memoryId]);
       const fallbackTitle = `Photos from ${new Date(mem?.event_date_start || Date.now()).toLocaleDateString()}`;
       await dbRun(`UPDATE memories SET title = ?, updated_at = datetime('now') WHERE id = ?`, [fallbackTitle, memoryId]);
     }
 
-    // Rate limit between Gemini calls
     if (i < memoryIds.length - 1) {
       await new Promise((resolve) => setTimeout(resolve, NARRATIVE_DELAY_MS));
     }

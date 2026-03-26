@@ -1,182 +1,240 @@
 /**
- * Gemini Narrative Generator
- * Calls Gemini 2.0 Flash to generate titles, narratives, location labels, and tags for memories.
- * Includes retry with exponential backoff and request timeouts.
+ * Gemini Narrative Generator — Vision-enhanced
+ * Uses Gemini 2.5 Flash with actual photo images for accurate memory titles/narratives.
+ * Falls back to text-only when no photos are available.
  */
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+import sharp from "sharp";
+import fs from "fs";
+
+// Read lazily so standalone scripts can parse .env before these functions are called
+const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const getApiKey = () => process.env.GEMINI_API_KEY || "";
 
 const MAX_RETRIES = 2;
-const INITIAL_BACKOFF_MS = 2000;
-const REQUEST_TIMEOUT_MS = 15000;
+const INITIAL_BACKOFF_MS = 3000;
+const REQUEST_TIMEOUT_MS = 30000;
+const THUMB_SIZE = 512; // px — max dimension for vision thumbnails
+const MAX_PHOTOS_PER_REQUEST = 4;
 
 /**
- * Generate a narrative for a memory event.
- * @param {Object} metadata
- * @param {string} metadata.eventDateStart
- * @param {string} metadata.eventDateEnd
- * @param {number|null} metadata.centerLat
- * @param {number|null} metadata.centerLng
- * @param {number} metadata.photoCount
- * @param {string[]} metadata.people
- * @param {string[]} metadata.tags
- * @param {string} metadata.season
- * @param {string[]} [metadata.filenames]
- * @param {string} [metadata.dayOfWeek]
- * @param {string} [metadata.timeOfDay]
- * @param {number} [metadata.spanDays]
- * @returns {Promise<{title: string, narrative: string|null, locationLabel: string|null, tags: string[]}>}
+ * Load an image, resize to thumbnail, return as base64 JPEG. Returns null on failure.
  */
-export async function generateNarrative(metadata) {
-  if (!GEMINI_API_KEY) {
-    console.warn("GEMINI_API_KEY not set — using fallback title");
-    return {
-      title: `Photos from ${new Date(metadata.eventDateStart).toLocaleDateString()}`,
-      narrative: null,
-      locationLabel: null,
-      tags: [],
-    };
+async function photoToBase64(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const buf = await sharp(filePath)
+      .rotate()
+      .resize({ width: THUMB_SIZE, height: THUMB_SIZE, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 75 })
+      .toBuffer();
+    return buf.toString("base64");
+  } catch {
+    return null;
   }
+}
 
-  const gpsInfo =
-    metadata.centerLat != null && metadata.centerLng != null
-      ? `${metadata.centerLat.toFixed(4)}, ${metadata.centerLng.toFixed(4)}`
-      : "No GPS data";
+/**
+ * Parse JSON from a Gemini response string, handling markdown code fences.
+ */
+function parseGeminiJson(text) {
+  if (!text) return null;
+  const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    const match = stripped.match(/\{[\s\S]+\}/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch { return null; }
+    }
+    return null;
+  }
+}
 
-  const peopleInfo =
-    metadata.people.length > 0 ? metadata.people.join(", ") : "Unknown";
-
-  const tagsInfo =
-    metadata.tags && metadata.tags.length > 0 ? metadata.tags.join(", ") : "None";
-
-  const filenamesInfo =
-    metadata.filenames && metadata.filenames.length > 0
-      ? metadata.filenames.join(", ")
-      : "None";
-
-  const spanLabel =
-    metadata.spanDays != null
-      ? metadata.spanDays === 0
-        ? "single day"
-        : `${metadata.spanDays} day${metadata.spanDays > 1 ? "s" : ""}`
-      : "unknown";
-
-  const dayInfo = metadata.dayOfWeek || "unknown";
-  const timeInfo = metadata.timeOfDay || "unknown";
-
-  const prompt = `You are a warm family photo album narrator.
-
-Given metadata about a group of photos from the same event, produce:
-1. title — A short evocative title (3-7 words). Be specific: use names, places, or activities when available. Avoid generic titles like "Family Fun" or "A Day Out".
-2. narrative — A nostalgic 2-3 sentence story. Reference specific people by name if listed. Mention the setting (season, time of day, location). Write as if captioning a scrapbook page.
-3. locationLabel — A human-readable place name derived from the GPS coordinates. Use the format "City, State" or "Neighborhood, City" if possible. Return null if no GPS data.
-4. tags — An array of 5-10 descriptive tags for this event. Lowercase. Focus on: activities, settings, moods, occasions, themes. Examples: "birthday party", "beach", "sunset", "family dinner", "hiking", "holiday".
-
-Respond in JSON only: { "title": "...", "narrative": "...", "locationLabel": "...", "tags": ["..."] }
-
-Event metadata:
-- Date range: ${metadata.eventDateStart} to ${metadata.eventDateEnd}
-- Duration: ${spanLabel}
-- Day: ${dayInfo}
-- Time of day: ${timeInfo}
-- Season: ${metadata.season}
-- GPS centroid: ${gpsInfo}
-- Photos: ${metadata.photoCount}
-- Sample filenames: ${filenamesInfo}
-- People present: ${peopleInfo}
-- Existing photo tags: ${tagsInfo}`;
-
+/**
+ * Core Gemini API call with retry/backoff.
+ */
+async function callGemini(parts) {
   let lastError = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-      console.log(`  Retry ${attempt}/${MAX_RETRIES} after ${backoff}ms...`);
-      await new Promise((resolve) => setTimeout(resolve, backoff));
+      console.log(`  ↩ Retry ${attempt}/${MAX_RETRIES} after ${backoff}ms...`);
+      await new Promise((r) => setTimeout(r, backoff));
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const tid = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-      const response = await fetch(
-        `${GEMINI_URL}?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.8,
-              maxOutputTokens: 400,
-              responseMimeType: "application/json",
-            },
-          }),
-          signal: controller.signal,
-        }
-      );
+      const res = await fetch(`${GEMINI_URL}?key=${encodeURIComponent(getApiKey())}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 3000,
+            // Note: do NOT use responseMimeType with vision — causes truncation
+          },
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errText = await response.text();
-        lastError = new Error(`Gemini API ${response.status}: ${errText}`);
-        // Retry on 429, 500, 503
-        if ([429, 500, 503].includes(response.status)) {
-          continue;
-        }
+      if (!res.ok) {
+        const errText = await res.text();
+        lastError = new Error(`Gemini ${res.status}: ${errText.substring(0, 200)}`);
+        if ([429, 500, 503].includes(res.status)) continue;
         throw lastError;
       }
 
-      const data = await response.json();
+      const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) {
-        throw new Error("Empty response from Gemini");
+      const finishReason = data.candidates?.[0]?.finishReason;
+
+      if (finishReason === "MAX_TOKENS" && !text) {
+        lastError = new Error("Response truncated with no content");
+        continue;
       }
 
-      let parsed;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // Try regex extraction as fallback
-        const titleMatch = text.match(/"title"\s*:\s*"([^"]+)"/);
-        const narrativeMatch = text.match(/"narrative"\s*:\s*"([^"]+)"/);
-        const locationMatch = text.match(/"locationLabel"\s*:\s*"([^"]+)"/);
-        parsed = {
-          title: titleMatch?.[1] || null,
-          narrative: narrativeMatch?.[1] || null,
-          locationLabel: locationMatch?.[1] || null,
-          tags: [],
-        };
+      const parsed = parseGeminiJson(text);
+      if (!parsed) {
+        lastError = new Error(`JSON parse failed: ${text?.substring(0, 100)}`);
+        continue;
       }
 
       return {
-        title: parsed.title || null,
-        narrative: parsed.narrative || null,
-        locationLabel: parsed.locationLabel || null,
-        tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+        title: typeof parsed.title === "string" ? parsed.title.trim() : null,
+        narrative: typeof parsed.narrative === "string" ? parsed.narrative.trim() : null,
+        locationLabel: typeof parsed.locationLabel === "string" ? parsed.locationLabel.trim() : null,
+        tags: Array.isArray(parsed.tags) ? parsed.tags.filter((t) => typeof t === "string") : [],
       };
     } catch (err) {
-      clearTimeout(timeoutId);
-      if (err.name === "AbortError") {
-        lastError = new Error("Gemini request timed out");
-        continue;
-      }
+      clearTimeout(tid);
+      if (err.name === "AbortError") { lastError = new Error("Gemini timed out"); continue; }
       lastError = err;
-      // Only retry on timeout/server errors, not client errors
       if (attempt < MAX_RETRIES) continue;
     }
   }
 
-  console.error("Gemini narrative generation failed after retries:", lastError?.message);
+  console.error("  ✗ Gemini failed:", lastError?.message);
+  return null;
+}
+
+/**
+ * Generate memory narrative using Gemini Vision (photos + metadata).
+ * @param {Object} metadata  - Event metadata (dates, GPS, people, tags, etc.)
+ * @param {string[]} photoPaths - File system paths to representative photos (up to 4 used)
+ * @param {string|null} locationLabel - Pre-fetched place name from reverse geocoding
+ */
+export async function generateNarrativeWithVision(metadata, photoPaths = [], locationLabel = null) {
+  if (!getApiKey()) return fallbackResult(metadata);
+
+  // Build image parts from file paths
+  const parts = [];
+  let imagesAdded = 0;
+  for (const p of photoPaths.slice(0, MAX_PHOTOS_PER_REQUEST)) {
+    const b64 = await photoToBase64(p);
+    if (b64) {
+      parts.push({ inline_data: { mime_type: "image/jpeg", data: b64 } });
+      imagesAdded++;
+    }
+  }
+
+  const dateStr = new Date(metadata.eventDateStart).toLocaleDateString("en-US", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+  });
+  const spanLabel = (metadata.spanDays ?? 0) > 0
+    ? `${metadata.spanDays} day${metadata.spanDays > 1 ? "s" : ""}`
+    : "single day";
+  const gpsStr = metadata.centerLat != null
+    ? `${metadata.centerLat.toFixed(4)}, ${metadata.centerLng.toFixed(4)}`
+    : null;
+
+  const ctx = [
+    `Date: ${dateStr} (${spanLabel}, ${metadata.season})`,
+    `Time of day: ${metadata.timeOfDay || "unknown"}`,
+    gpsStr ? `GPS: ${gpsStr}` : null,
+    locationLabel ? `Location: ${locationLabel}` : null,
+    `Photo count: ${metadata.photoCount}`,
+    metadata.people?.length > 0 ? `People: ${metadata.people.join(", ")}` : null,
+    metadata.tags?.length > 0 ? `Existing tags: ${metadata.tags.join(", ")}` : null,
+  ].filter(Boolean).join("\n");
+
+  const visionNote = imagesAdded > 0
+    ? `You are viewing ${imagesAdded} representative photo${imagesAdded > 1 ? "s" : ""} from this family event. Use what you actually see to inform your response.`
+    : "No photos available — base your response on the metadata only.";
+
+  const prompt = `You are a warm family photo album narrator. ${visionNote}
+
+Event context:
+${ctx}
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{"title":"3-7 evocative words based on what you see","narrative":"2 warm sentences referencing specific visual details and people by name if known","locationLabel":"City, State or specific place name (null if unknown)","tags":["5 to 8 lowercase descriptive tags based on activities/setting/mood visible in photos"]}`;
+
+  parts.push({ text: prompt });
+
+  const result = await callGemini(parts);
+  if (!result) return fallbackResult(metadata);
+
   return {
-    title: `Photos from ${new Date(metadata.eventDateStart).toLocaleDateString()}`,
-    narrative: null,
-    locationLabel: null,
-    tags: [],
+    title: result.title || fallbackTitle(metadata),
+    narrative: result.narrative || null,
+    locationLabel: result.locationLabel || locationLabel || null,
+    tags: result.tags || [],
   };
 }
 
-export default { generateNarrative };
+/**
+ * Text-only narrative generation (no vision). Used as fallback or in bulk text mode.
+ */
+export async function generateNarrative(metadata) {
+  if (!getApiKey()) return fallbackResult(metadata);
+
+  const gpsInfo = metadata.centerLat != null
+    ? `${metadata.centerLat.toFixed(4)}, ${metadata.centerLng.toFixed(4)}`
+    : "No GPS data";
+
+  const prompt = `You are a warm family photo album narrator.
+
+Given metadata about a group of photos from the same event, produce:
+1. title — 3-7 evocative words. Be specific: use names, places, or activities when available.
+2. narrative — Nostalgic 2-3 sentence story. Reference people by name. Mention season/time/location.
+3. locationLabel — Human-readable place name from GPS. "City, State" format. null if no GPS.
+4. tags — 5-10 descriptive lowercase tags. Activities, settings, moods, occasions.
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{"title":"...","narrative":"...","locationLabel":"...","tags":["..."]}
+
+Metadata:
+- Date: ${metadata.eventDateStart} to ${metadata.eventDateEnd} (${metadata.spanDays ?? 0}d, ${metadata.season})
+- Time: ${metadata.dayOfWeek || ""} ${metadata.timeOfDay || ""}
+- GPS: ${gpsInfo}
+- Photos: ${metadata.photoCount}
+- People: ${metadata.people?.join(", ") || "Unknown"}
+- Tags: ${metadata.tags?.join(", ") || "None"}
+- Filenames: ${metadata.filenames?.join(", ") || "None"}`;
+
+  const result = await callGemini([{ text: prompt }]);
+  if (!result) return fallbackResult(metadata);
+
+  return {
+    title: result.title || fallbackTitle(metadata),
+    narrative: result.narrative || null,
+    locationLabel: result.locationLabel || null,
+    tags: result.tags || [],
+  };
+}
+
+function fallbackTitle(metadata) {
+  return `Photos from ${new Date(metadata.eventDateStart).toLocaleDateString()}`;
+}
+function fallbackResult(metadata) {
+  return { title: fallbackTitle(metadata), narrative: null, locationLabel: null, tags: [] };
+}
+
+export default { generateNarrative, generateNarrativeWithVision };
