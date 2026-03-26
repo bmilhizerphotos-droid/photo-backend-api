@@ -1413,9 +1413,11 @@ app.get("/api/photos/favorites", authenticateToken, async (req, res) => {
 
 // ---------------- TRASH (soft-deleted photos) ----------------
 app.get("/api/photos/trash", authenticateToken, async (req, res) => {
+  const t0 = Date.now();
   try {
     const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
     const offset = Math.max(0, Number(req.query.offset || 0));
+    console.log(`GET /api/photos/trash offset=${offset} limit=${limit}`);
     const RETENTION = parseInt(process.env.TRASH_RETENTION_DAYS || "30", 10);
 
     const [rows, countRow] = await Promise.all([
@@ -1449,6 +1451,7 @@ app.get("/api/photos/trash", authenticateToken, async (req, res) => {
       };
     });
 
+    console.log(`GET /api/photos/trash → ${total} total, ${rows.length} rows, took ${Date.now()-t0}ms`);
     res.json({ photos, total, offset, limit, hasMore: offset + rows.length < total, retentionDays: RETENTION });
   } catch (err) {
     console.error("GET /api/photos/trash error:", err);

@@ -6,6 +6,11 @@ export const db = await open({
   driver: sqlite3.Database,
 });
 
+// Enable WAL mode for better concurrency (readers don't block writers)
+await db.run("PRAGMA journal_mode=WAL");
+await db.run("PRAGMA busy_timeout=5000");
+await db.run("PRAGMA synchronous=NORMAL");
+
 export async function dbRun(sql, params = []) {
   return db.run(sql, params);
 }
