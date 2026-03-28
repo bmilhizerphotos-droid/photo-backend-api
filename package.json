@@ -17,6 +17,8 @@
     "scan-duplicates:test": "node scan-duplicates.js --limit 100 --dry-run --verbose",
     "populate-paths": "node populate-photo-paths.js",
     "populate-paths:test": "node populate-photo-paths.js --limit 10 --verbose --dry-run",
+    "fix-dates": "node fix-dates-from-backup.js",
+    "fix-dates:dry-run": "node fix-dates-from-backup.js --dry-run",
     "update-dates": "node update-exif-dates.js",
     "update-dates:test": "node update-exif-dates.js --limit 50 --dry-run",
     "update-dates:all": "node update-exif-dates.js --all",

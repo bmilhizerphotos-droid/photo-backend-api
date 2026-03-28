@@ -35,6 +35,20 @@ module.exports = {
       }
     },
     {
+      name: 'memory-enrichment',
+      script: 'enrich-memories.js',
+      cwd: 'C:\\Users\\bmilh\\photo-app\\photo-backend',
+      interpreter: 'node',
+      watch: false,
+      autorestart: false,
+      error_file: 'C:\\Users\\bmilh\\photo-app\\photo-backend\\logs\\memory-enrichment.err.log',
+      out_file: 'C:\\Users\\bmilh\\photo-app\\photo-backend\\logs\\memory-enrichment.out.log',
+      time: true,
+      env: {
+        NODE_ENV: 'production'
+      }
+    },
+    {
       name: 'cloudflared',
       script: 'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe',
       args: 'tunnel --config C:\\Users\\bmilh\\.cloudflared\\config.yml run photo-backend',

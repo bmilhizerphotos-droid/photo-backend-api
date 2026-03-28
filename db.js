@@ -23,6 +23,18 @@ export async function dbAll(sql, params = []) {
   return db.all(sql, params);
 }
 
+export async function dbBegin() {
+  return db.run("BEGIN");
+}
+
+export async function dbCommit() {
+  return db.run("COMMIT");
+}
+
+export async function dbRollback() {
+  return db.run("ROLLBACK");
+}
+
 /* ================================
    FACE DETECTION TABLES (FOUNDATION)
    ================================ */

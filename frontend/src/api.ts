@@ -169,25 +169,14 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
     ? `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
     : `/api/photos?offset=${offset}&limit=${limit}`;
 
-  try {
-    const res = await fetchWithAuth(url);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
-    }
-    const data = await res.json();
-    const photos = data?.photos ?? data;
-    const token = await getAuthToken();
-    return normalizePhotos(photos, token);
-  } catch (error: any) {
-    if (error.name === "AbortError") {
-      console.error("Timeout fetching photos");
-      throw new Error("Request timeout - please check your internet connection");
-    } else {
-      console.error("Error fetching photos:", error);
-    }
-    // Return empty array on failure to prevent app crash
-    return [];
+  const res = await fetchWithAuth(url);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
   }
+  const data = await res.json();
+  const photos = data?.photos ?? data;
+  const token = await getAuthToken();
+  return normalizePhotos(photos, token);
 }
 
 /* =====================

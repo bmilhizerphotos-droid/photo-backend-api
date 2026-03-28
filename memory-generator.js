@@ -436,9 +436,9 @@ export async function generateMemories() {
  * Processes up to 10 memories per run (for incremental use).
  * Returns number of narratives generated.
  */
-export async function generateNarratives() {
+export async function generateNarratives(limit = 10) {
   const memories = await dbAll(
-    `SELECT id FROM memories WHERE title IS NULL LIMIT 10`
+    `SELECT id FROM memories WHERE title IS NULL OR title LIKE 'Photos from%' LIMIT ${Math.max(1, limit)}`
   );
 
   let generated = 0;
