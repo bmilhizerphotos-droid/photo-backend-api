@@ -12,7 +12,7 @@ const API_BASE =
    HELPERS
    ===================== */
 
-async function getAuthToken(): Promise<string | null> {
+export async function getAuthToken(): Promise<string | null> {
   const user = auth.currentUser;
   if (!user) {
     console.warn("⚠️ getAuthToken: No authenticated user. Proceeding without token.");
@@ -712,6 +712,49 @@ export async function fetchScreenshotScanStatus(): Promise<{
   return res.json();
 }
 
+// ── Videos ────────────────────────────────────────
+export interface VideoItem {
+  id: number;
+  filename: string;
+  dateTaken: string | null;
+  duration: number | null;
+  thumbnailUrl: string;
+  streamUrl: string;
+}
+
+export async function fetchVideos(offset = 0, limit = 50): Promise<{ videos: VideoItem[]; total: number; hasMore: boolean }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/videos?offset=${offset}&limit=${limit}`
+    : `/api/photos/videos?offset=${offset}&limit=${limit}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch videos: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  const videos: VideoItem[] = (data.videos ?? []).map((v: any) => ({
+    id: v.id,
+    filename: v.filename,
+    dateTaken: v.dateTaken,
+    duration: v.duration,
+    thumbnailUrl: appendToken(v.thumbnailUrl, token) ?? v.thumbnailUrl,
+    streamUrl: appendToken(v.streamUrl, token) ?? v.streamUrl,
+  }));
+  return { videos, total: data.total ?? 0, hasMore: data.hasMore ?? false };
+}
+
+export async function startVideoScan(): Promise<{ started: boolean }> {
+  const url = API_BASE ? `${API_BASE}/api/photos/scan-videos` : `/api/photos/scan-videos`;
+  const res = await fetchWithAuth(url, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to start video scan: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchVideoScanStatus(): Promise<{ running: boolean; found: number; error: string | null }> {
+  const url = API_BASE ? `${API_BASE}/api/photos/videos/status` : `/api/photos/videos/status`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to get video scan status: ${res.status}`);
+  return res.json();
+}
+
 export async function softDeletePhotos(photoIds: number[]): Promise<void> {
   const url = API_BASE
     ? `${API_BASE}/api/photos/soft-delete`
@@ -857,6 +900,23 @@ export async function emptyTrash(): Promise<{ deleted: number }> {
 export interface OnThisDayGroup {
   year: number;
   photos: { id: number; filename: string; thumbnailUrl: string; dateTaken: string }[];
+}
+
+// ── Map View ──────────────────────────────────────
+export interface MapPhoto {
+  id: number;
+  filename: string;
+  dateTaken: string | null;
+  lat: number;
+  lng: number;
+}
+
+export async function fetchMapPhotos(): Promise<MapPhoto[]> {
+  const url = API_BASE ? `${API_BASE}/api/photos/map` : `/api/photos/map`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch map photos: ${res.status}`);
+  const data = await res.json();
+  return data.photos ?? [];
 }
 
 export async function fetchOnThisDay(): Promise<{ groups: OnThisDayGroup[]; total: number }> {

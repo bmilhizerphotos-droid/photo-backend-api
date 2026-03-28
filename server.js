@@ -87,6 +87,17 @@ app.use(express.json());
   }
   await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_screenshot ON photos(is_screenshot)");
 
+  // Video column
+  for (const sql of [
+    "ALTER TABLE photos ADD COLUMN is_video INTEGER DEFAULT 0",
+    "ALTER TABLE photos ADD COLUMN video_duration INTEGER",  // seconds
+  ]) {
+    try { await dbRun(sql); } catch (err) {
+      if (!/duplicate column/i.test(err?.message || "")) console.error(sql, err);
+    }
+  }
+  await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_video ON photos(is_video)");
+
   // Phase 1 migrations
   for (const sql of [
     "ALTER TABLE photos ADD COLUMN deleted_at DATETIME",
@@ -1801,6 +1812,131 @@ app.delete("/api/photos/:photoId/people/:personId", authenticateToken, async (re
   } catch (err) {
     console.error("Failed to remove person tag from photo:", err);
     res.status(500).json({ error: "Failed to remove person tag from photo" });
+  }
+});
+
+// ── Videos ───────────────────────────────────────
+app.get("/api/photos/videos", authenticateToken, async (req, res) => {
+  try {
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
+    const limit  = Math.min(200, parseInt(req.query.limit) || 50);
+    const protocol = req.get("x-forwarded-proto") || req.protocol;
+    const host = req.get("x-forwarded-host") || req.get("host");
+    const base = `${protocol}://${host}`;
+    const token = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null;
+    const tokenSuffix = token ? `?token=${encodeURIComponent(token)}` : "";
+
+    const total = (await dbGet("SELECT COUNT(*) as c FROM photos WHERE is_video=1 AND is_deleted=0")).c;
+    const rows  = await dbAll(
+      `SELECT id, filename, date_taken, full_path, video_duration
+       FROM photos WHERE is_video=1 AND is_deleted=0
+       ORDER BY date_taken DESC NULLS LAST
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+    const videos = rows.map(r => ({
+      id: r.id,
+      filename: r.filename,
+      dateTaken: r.date_taken,
+      duration: r.video_duration,
+      thumbnailUrl: `${base}/thumbnails/${r.id}${tokenSuffix}`,
+      streamUrl: `${base}/api/photos/${r.id}/stream${tokenSuffix}`,
+    }));
+    res.json({ total, offset, limit, hasMore: offset + rows.length < total, videos });
+  } catch (err) {
+    console.error("GET /api/photos/videos error:", err);
+    res.status(500).json({ error: "Failed to fetch videos" });
+  }
+});
+
+// Video scan status
+const videoScanState = { running: false, progress: 0, total: 0, found: 0, error: null };
+
+app.get("/api/photos/videos/status", authenticateToken, (_req, res) => {
+  res.json({ ...videoScanState });
+});
+
+app.post("/api/photos/scan-videos", authenticateToken, async (_req, res) => {
+  if (videoScanState.running) return res.json({ started: false, message: "Already running" });
+  res.json({ started: true });
+  const { default: { spawn } } = await import("child_process");
+  const { fileURLToPath } = await import("url");
+  const { dirname: _dirname, join: _join } = await import("path");
+  const __scanDir = _dirname(fileURLToPath(import.meta.url));
+  const child = spawn(process.execPath, [_join(__scanDir, "scan-videos.js")], {
+    stdio: "inherit", env: { ...process.env }
+  });
+  videoScanState.running = true;
+  child.on("close", (code) => {
+    videoScanState.running = false;
+    if (code !== 0) videoScanState.error = `exited with code ${code}`;
+  });
+});
+
+// Stream a video file
+app.get("/api/photos/:id/stream", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const row = await dbGet("SELECT full_path, filename, is_video FROM photos WHERE id=?", [id]);
+    if (!row || !row.is_video) return res.status(404).json({ error: "Video not found" });
+
+    const filePath = row.full_path || findFileRecursive(PHOTO_ROOT, row.filename);
+    if (!filePath || !isPathWithinRoot(filePath)) return res.status(404).json({ error: "File not found" });
+
+    const ext = path.extname(row.filename).toLowerCase();
+    const mimeMap = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/mp4", ".avi": "video/x-msvideo", ".3gp": "video/3gpp", ".mkv": "video/x-matroska", ".webm": "video/webm" };
+    const contentType = mimeMap[ext] || "video/mp4";
+
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end   = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunkSize,
+        "Content-Type": contentType,
+      });
+      fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, {
+        "Content-Length": fileSize,
+        "Content-Type": contentType,
+        "Accept-Ranges": "bytes",
+      });
+      fs.createReadStream(filePath).pipe(res);
+    }
+  } catch (err) {
+    console.error("GET /api/photos/:id/stream error:", err);
+    res.status(500).json({ error: "Failed to stream video" });
+  }
+});
+
+// ── Map View ─────────────────────────────────────
+app.get("/api/photos/map", authenticateToken, async (req, res) => {
+  try {
+    const rows = await dbAll(
+      `SELECT id, filename, date_taken, gps_lat, gps_lng
+       FROM photos
+       WHERE gps_lat IS NOT NULL AND gps_lng IS NOT NULL
+         AND is_deleted = 0
+       ORDER BY date_taken DESC`
+    );
+    res.json({ photos: rows.map(r => ({
+      id: r.id,
+      filename: r.filename,
+      dateTaken: r.date_taken,
+      lat: r.gps_lat,
+      lng: r.gps_lng,
+    }))});
+  } catch (err) {
+    console.error("GET /api/photos/map error:", err);
+    res.status(500).json({ error: "Failed to fetch map photos" });
   }
 });
 

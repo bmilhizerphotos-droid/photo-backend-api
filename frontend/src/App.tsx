@@ -27,6 +27,8 @@ import ScreenshotsView from "./components/ScreenshotsView";
 import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
 import OnThisDayView from "./components/OnThisDayView";
+import MapView from "./components/MapView";
+import VideosView from "./components/VideosView";
 import BirthdayBanner from "./components/BirthdayBanner";
 import MemorySlideshow from "./components/MemorySlideshow";
 import MemoriesGrid from "./components/MemoriesGrid";
@@ -66,6 +68,10 @@ export default function App() {
   const [selectedPhotoForTagging, setSelectedPhotoForTagging] = useState<Photo | null>(null);
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
+
+  // Scroll container ref — passed as root to IntersectionObserver so infinite scroll
+  // works when <main> is the scroll container (not the viewport)
+  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
 
   // Memory slideshow
   const [slideshowMemory, setSlideshowMemory] = useState<Memory | null>(null);
@@ -110,6 +116,7 @@ export default function App() {
   const sentinelRef = useIntersectionSentinel({
     enabled: !!user && view === "photos" && !searching && hasMore && !photosLoading,
     onIntersect: loadMore,
+    root: mainEl,
   });
 
   // Load albums (sidebar) on mount
@@ -172,6 +179,7 @@ export default function App() {
   const searchSentinelRef = useIntersectionSentinel({
     enabled: !!user && searching && searchHasMore && !searchLoading && !searchLoadingMore,
     onIntersect: loadMoreSearch,
+    root: mainEl,
   });
 
   // 🔍 Run first-page search when debounced query changes
@@ -596,11 +604,19 @@ export default function App() {
     }
 
     if (view === "on-this-day") return <OnThisDayView />;
+    if (view === "map") return (
+      <MapView
+        onOpenPhoto={(id, filename) => {
+          setModalPhoto({ id, filename, thumbnailUrl: `${import.meta.env.VITE_API_BASE_URL ?? ""}/thumbnails/${id}`, fullUrl: `${import.meta.env.VITE_API_BASE_URL ?? ""}/photos/${id}` } as Photo);
+        }}
+      />
+    );
     if (view === "memories") return (
       <MemoriesGrid onSelectMemory={(memory) => setSlideshowMemory(memory)} />
     );
     if (view === "documents") return <DocumentsView onPhotoClick={(p) => setModalPhoto(p)} />;
     if (view === "screenshots") return <ScreenshotsView onPhotoClick={(p) => setModalPhoto(p)} />;
+    if (view === "videos") return <VideosView />;
 
     // Placeholder views for future features
     const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {
@@ -689,7 +705,7 @@ export default function App() {
         onCreateAlbum={() => setShowCreateAlbumModal(true)}
       />
 
-      <main className="flex-1 p-4 overflow-y-auto">
+      <main ref={setMainEl} className="flex-1 p-4 overflow-y-auto">
         <BirthdayBanner />
         <div className="mb-4 flex items-center justify-end gap-3">
           <div className="text-sm text-gray-500">{user.email}</div>

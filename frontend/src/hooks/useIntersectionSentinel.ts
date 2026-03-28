@@ -5,8 +5,9 @@ export function useIntersectionSentinel(opts: {
   onIntersect: () => void;
   rootMargin?: string;
   threshold?: number;
+  root?: Element | null;
 }) {
-  const { enabled, onIntersect, rootMargin = "800px 0px", threshold = 0 } = opts;
+  const { enabled, onIntersect, rootMargin = "800px 0px", threshold = 0, root = null } = opts;
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -19,12 +20,12 @@ export function useIntersectionSentinel(opts: {
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) onIntersect();
       },
-      { root: null, rootMargin, threshold }
+      { root, rootMargin, threshold }
     );
 
     obs.observe(el);
     return () => obs.disconnect();
-  }, [enabled, onIntersect, rootMargin, threshold]);
+  }, [enabled, onIntersect, root, rootMargin, threshold]);
 
   return ref;
 }

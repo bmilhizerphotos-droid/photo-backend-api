@@ -28,6 +28,8 @@
     "scan-screenshots": "node scan-screenshots.js",
     "scan-screenshots:test": "node scan-screenshots.js --limit 50 --dry-run",
     "scan-screenshots:all": "node scan-screenshots.js --all",
+    "scan-videos": "node scan-videos.js",
+    "scan-videos:test": "node scan-videos.js --limit 20 --dry-run",
     "regen-memories": "node regenerate-memories.js",
     "regen-memories:test": "node regenerate-memories.js --test=3",
     "regen-memories:batch": "node regenerate-memories.js --limit=100",
