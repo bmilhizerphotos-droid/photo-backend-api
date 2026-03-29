@@ -2154,7 +2154,7 @@ app.get("/api/memories/:id/photos", authenticateToken, async (req, res) => {
     const photos = rows.map((r) => ({
       id: r.id, filename: r.filename, dateTaken: r.date_taken,
       thumbnailUrl: `/thumbnails/${r.id}`,
-      imageUrl: `/api/photos/${r.id}/file`,
+      imageUrl: `/photos/${r.id}`,
     }));
     res.json({ photos });
   } catch (err) {

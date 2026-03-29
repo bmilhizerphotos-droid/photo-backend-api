@@ -24,7 +24,7 @@ export async function getAuthToken(): Promise<string | null> {
 async function fetchWithAuth(
   url: string,
   options: RequestInit = {},
-  timeoutMs = 10000
+  timeoutMs = 30000
 ): Promise<Response> {
   const token = await getAuthToken();
   const headers = new Headers(options.headers || {});
