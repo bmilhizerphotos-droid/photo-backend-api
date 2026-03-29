@@ -5,6 +5,7 @@ import { auth, signInWithGoogle, completeRedirectSignIn, signOutUser } from '../
 interface UseAuthReturn {
   user: User | null;
   loading: boolean;
+  signingIn: boolean;
   error: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -13,17 +14,22 @@ interface UseAuthReturn {
 export function useAuth(): UseAuthReturn {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Authentication handler
   const signIn = useCallback(async () => {
+    if (signingIn) return;          // prevent double-click
+    setSigningIn(true);
     setError(null);
     try {
       await signInWithGoogle();
     } catch (err: unknown) {
       setError(String(err));
+    } finally {
+      setSigningIn(false);
     }
-  }, []);
+  }, [signingIn]);
 
   const signOut = useCallback(async () => {
     try {
@@ -52,5 +58,5 @@ export function useAuth(): UseAuthReturn {
     return () => unsubscribe();
   }, []);
 
-  return { user, loading, error, signIn, signOut };
+  return { user, loading, signingIn, error, signIn, signOut };
 }

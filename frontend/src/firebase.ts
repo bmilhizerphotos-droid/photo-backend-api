@@ -49,6 +49,12 @@ export async function signInWithGoogle(): Promise<UserCredential> {
       return new Promise<UserCredential>(() => {});
     }
 
+    // A second sign-in attempt was made while a popup was already open.
+    // The first popup was cancelled but the new one proceeds — silently swallow.
+    if (code === "auth/cancelled-popup-request") {
+      return new Promise<UserCredential>(() => {});
+    }
+
     throw err;
   }
 }

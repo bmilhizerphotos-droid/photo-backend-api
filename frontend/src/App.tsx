@@ -40,7 +40,7 @@ import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
 
 export default function App() {
-  const { user, loading: authLoading, error: authError, signIn, signOut } = useAuth();
+  const { user, loading: authLoading, signingIn, error: authError, signIn, signOut } = useAuth();
   const [view, setView] = useState<AppView>("photos");
 
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -669,9 +669,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => void signIn()}
-            className="mt-6 inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            disabled={signingIn}
+            className="mt-6 inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Sign In With Google
+            {signingIn ? "Opening Google…" : "Sign In With Google"}
           </button>
         </div>
       </div>
