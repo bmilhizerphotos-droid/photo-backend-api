@@ -509,10 +509,13 @@ app.get("/photos/:id", authenticateToken, async (req, res) => {
       return res.status(400).json({ error: "Invalid photo ID" });
     }
     
-    const row = await dbGet("SELECT filename FROM photos WHERE id = ?", [id]);
+    const row = await dbGet("SELECT filename, full_path FROM photos WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "Photo not found" });
 
-    const filePath = getPhotoPathOr404(res, row.filename);
+    // Use full_path directly; fall back to recursive search only if needed
+    let filePath = (row.full_path && isPathWithinRoot(row.full_path) && fs.existsSync(row.full_path))
+      ? path.resolve(row.full_path)
+      : getPhotoPathOr404(res, row.filename);
     if (!filePath) return;
 
     res.sendFile(filePath);
@@ -2154,7 +2157,7 @@ app.get("/api/memories/:id/photos", authenticateToken, async (req, res) => {
     const photos = rows.map((r) => ({
       id: r.id, filename: r.filename, dateTaken: r.date_taken,
       thumbnailUrl: `/thumbnails/${r.id}`,
-      imageUrl: `/photos/${r.id}`,
+      imageUrl: `/display/${r.id}`,
     }));
     res.json({ photos });
   } catch (err) {
