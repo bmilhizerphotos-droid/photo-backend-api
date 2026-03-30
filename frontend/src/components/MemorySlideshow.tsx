@@ -11,6 +11,7 @@ const SLIDE_INTERVAL_MS = 4000;
 export default function MemorySlideshow({ memory, onClose }: Props) {
   const [photos, setPhotos] = useState<MemoryPhoto[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [current, setCurrent] = useState(0);
   const [paused, setPaused] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
@@ -20,7 +21,11 @@ export default function MemorySlideshow({ memory, onClose }: Props) {
   useEffect(() => {
     fetchMemoryPhotos(memory.id)
       .then((p) => { setPhotos(p); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => {
+        console.error("fetchMemoryPhotos failed:", err);
+        setFetchError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
   }, [memory.id]);
 
   const goTo = useCallback((idx: number) => {
@@ -83,14 +88,21 @@ export default function MemorySlideshow({ memory, onClose }: Props) {
       <div className="flex-1 relative flex items-center justify-center overflow-hidden">
         {loading ? (
           <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin" />
+        ) : fetchError ? (
+          <div className="text-center text-white/70 p-8">
+            <p className="text-red-400 text-sm font-mono bg-black/50 rounded p-3">{fetchError}</p>
+          </div>
         ) : photo ? (
           <img
             key={photo.id}
             src={photo.imageUrl}
             alt={photo.filename}
+            onError={(e) => console.error("Image load failed:", photo.imageUrl, e)}
             className={`max-w-full max-h-full object-contain transition-opacity duration-300 ${transitioning ? "opacity-0" : "opacity-100"}`}
           />
-        ) : null}
+        ) : (
+          <div className="text-white/50 text-sm">No photos in this memory</div>
+        )}
 
         {/* Gradient overlays */}
         <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/70 to-transparent pointer-events-none" />
