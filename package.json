@@ -30,6 +30,8 @@
     "scan-screenshots:all": "node scan-screenshots.js --all",
     "scan-videos": "node scan-videos.js",
     "scan-videos:test": "node scan-videos.js --limit 20 --dry-run",
+    "set-earliest-dates": "node set-earliest-dates.js",
+    "set-earliest-dates:test": "node set-earliest-dates.js --limit 50 --dry-run",
     "regen-memories": "node regenerate-memories.js",
     "regen-memories:test": "node regenerate-memories.js --test=3",
     "regen-memories:batch": "node regenerate-memories.js --limit=100",
