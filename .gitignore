@@ -95,6 +95,15 @@ nul
 .claude/
 
 # =========================
+# Python virtual environments
+# =========================
+ai-env/
+tf_env/
+venv/
+.venv/
+env/
+
+# =========================
 # ML Models
 # =========================
 models/

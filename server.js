@@ -1019,7 +1019,7 @@ app.get("/api/albums/:id/photos", authenticateToken, async (req, res) => {
       id: p.id,
       filename: p.filename,
       thumbnailUrl: `${base}/thumbnails/${p.id}${tokenSuffix}`,
-      image_url: `${base}/api/photos/${p.id}/file${tokenSuffix}`,
+      image_url: `${base}/display/${p.id}${tokenSuffix}`,
       width: p.width || null,
       height: p.height || null,
       dateTaken: p.date_taken || null,
@@ -1692,6 +1692,15 @@ app.get("/api/people/:id/photos", authenticateToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "Failed to load people photos" });
   }
+});
+
+// ── /api/photos/:id and /api/photos/:id/file ─────────────────────────────────
+// Alias for older frontend builds that generate these URL patterns.
+// Constrained to numeric IDs only so named routes below (/videos, /map, etc.) still match.
+app.get(["/api/photos/:id(\\d+)/file", "/api/photos/:id(\\d+)"], authenticateToken, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const tokenPart = req.query.token ? `?token=${req.query.token}` : '';
+  res.redirect(307, `/display/${id}${tokenPart}`);
 });
 
 app.get("/api/photos/:id/faces", authenticateToken, async (req, res) => {
