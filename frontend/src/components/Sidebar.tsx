@@ -93,7 +93,7 @@ const NAV_ITEMS: { id: AppView; label: string; icon: React.ReactNode }[] = [
   { id: "memories",       label: "Memories",                icon: <MemoriesIcon /> },
   { id: "albums",         label: "Albums",                  icon: <AlbumsIcon /> },
   { id: "documents",      label: "Documents",               icon: <DocumentsIcon /> },
-  { id: "screenshots",    label: "Screenshots & recordings",icon: <ScreenshotsIcon /> },
+  { id: "screenshots",    label: "Screenshots",             icon: <ScreenshotsIcon /> },
   { id: "favorites",      label: "Favorites",               icon: <FavoritesIcon /> },
   { id: "people",         label: "People & pets",           icon: <PeopleIcon /> },
   { id: "map",            label: "Map",                     icon: <MapIcon /> },

@@ -122,29 +122,6 @@ export default function DocumentsView({
 
       </div>
 
-      {/* Scan progress */}
-      {status && (
-        <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-          <div className="flex items-center justify-between text-sm text-gray-700 mb-2">
-            <span>
-              {scanning ? 'AI scan in progress… (free tier: ~1,500 photos/day)' : 'Last scan results'}
-            </span>
-            <span className="font-medium">
-              {status.scanned.toLocaleString()} / {status.total.toLocaleString()} scanned ({scannedPct}%)
-            </span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-2">
-            <div
-              className="bg-blue-500 h-2 rounded-full transition-all"
-              style={{ width: `${scannedPct}%` }}
-            />
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            {status.documents.toLocaleString()} document photos identified
-            {scanning && ' · Refreshing every 5 seconds…'}
-          </p>
-        </div>
-      )}
 
       {/* Error */}
       {error && (

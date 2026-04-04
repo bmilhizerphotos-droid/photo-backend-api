@@ -620,7 +620,7 @@ export default function App() {
 
     // Placeholder views for future features
     const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {
-      screenshots:     { emoji: "🖥️", title: "Screenshots & recordings", desc: "Screenshots and screen recordings will appear here." },
+      screenshots:     { emoji: "🖥️", title: "Screenshots",             desc: "Screenshots will appear here." },
       places:          { emoji: "🗺️", title: "Places",                  desc: "Photos grouped by location will appear here." },
       videos:          { emoji: "🎬", title: "Videos",                  desc: "Your video files will appear here." },
       "recently-added":{ emoji: "🕐", title: "Recently added",          desc: "Photos added in the last 30 days." },

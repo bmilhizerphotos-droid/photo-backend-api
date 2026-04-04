@@ -106,53 +106,14 @@ export default function ScreenshotsView({
       {/* Header */}
       <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Screenshots &amp; Recordings</h1>
+          <h1 className="text-2xl font-semibold text-gray-900">Screenshots</h1>
           <p className="text-sm text-gray-500 mt-1">
             {total > 0
-              ? `${total.toLocaleString()} screenshot${total !== 1 ? 's' : ''} &amp; recording${total !== 1 ? 's' : ''} found`
-              : 'No screenshots or recordings detected yet'}
+              ? `${total.toLocaleString()} screenshot${total !== 1 ? 's' : ''} found`
+              : 'No screenshots detected yet'}
           </p>
         </div>
-
-        <button
-          onClick={handleScan}
-          disabled={scanning}
-          className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
-        >
-          {scanning ? (
-            <>
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Scanning…
-            </>
-          ) : (
-            <>🔍 Scan for Screenshots</>
-          )}
-        </button>
       </div>
-
-      {/* Scan progress */}
-      {status && (
-        <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-          <div className="flex items-center justify-between text-sm text-gray-700 mb-2">
-            <span>
-              {scanning ? 'AI scan in progress… (free tier: ~1,500 photos/day)' : 'Last scan results'}
-            </span>
-            <span className="font-medium">
-              {status.scanned.toLocaleString()} / {status.total.toLocaleString()} scanned ({scannedPct}%)
-            </span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-2">
-            <div
-              className="bg-blue-500 h-2 rounded-full transition-all"
-              style={{ width: `${scannedPct}%` }}
-            />
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            {status.screenshots.toLocaleString()} screenshots &amp; recordings identified
-            {scanning && ' · Refreshing every 5 seconds…'}
-          </p>
-        </div>
-      )}
 
       {error && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
