@@ -120,20 +120,6 @@ export default function DocumentsView({
           </p>
         </div>
 
-        <button
-          onClick={handleScan}
-          disabled={scanning}
-          className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
-        >
-          {scanning ? (
-            <>
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Scanning…
-            </>
-          ) : (
-            <>🔍 Scan for Documents</>
-          )}
-        </button>
       </div>
 
       {/* Scan progress */}
