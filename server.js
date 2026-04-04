@@ -1920,6 +1920,40 @@ app.get("/api/photos/:id/stream", authenticateToken, async (req, res) => {
   }
 });
 
+// ── Places (paginated geotagged photos) ──────────
+app.get("/api/photos/places", authenticateToken, async (req, res) => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit)  || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+    const [{ total }] = await dbAll(
+      `SELECT COUNT(*) as total FROM photos WHERE gps_lat IS NOT NULL AND gps_lng IS NOT NULL AND is_deleted = 0`
+    );
+    const rows = await dbAll(
+      `SELECT id, filename, date_taken, gps_lat, gps_lng
+       FROM photos
+       WHERE gps_lat IS NOT NULL AND gps_lng IS NOT NULL AND is_deleted = 0
+       ORDER BY date_taken DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+    res.json({
+      photos: rows.map(r => ({
+        id: r.id,
+        filename: r.filename,
+        date_taken: r.date_taken,
+        thumbnail_url: `/thumbnails/${r.id}`,
+        lat: r.gps_lat,
+        lng: r.gps_lng,
+      })),
+      total,
+      hasMore: offset + rows.length < total,
+    });
+  } catch (err) {
+    console.error("GET /api/photos/places error:", err);
+    res.status(500).json({ error: "Failed to fetch places photos" });
+  }
+});
+
 // ── Map View ─────────────────────────────────────
 app.get("/api/photos/map", authenticateToken, async (req, res) => {
   try {

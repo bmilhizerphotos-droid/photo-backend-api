@@ -637,6 +637,24 @@ export interface DocumentScanStatus {
   documents: number;
 }
 
+export async function fetchPlacesPhotos(
+  offset = 0,
+  limit = 50
+): Promise<{ photos: Photo[]; total: number; hasMore: boolean }> {
+  const url = API_BASE
+    ? `${API_BASE}/api/photos/places?offset=${offset}&limit=${limit}`
+    : `/api/photos/places?offset=${offset}&limit=${limit}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch places photos: ${res.status}`);
+  const data = await res.json();
+  const token = await getAuthToken();
+  return {
+    photos: normalizePhotos(data.photos ?? [], token),
+    total: data.total ?? 0,
+    hasMore: data.hasMore ?? false,
+  };
+}
+
 export async function fetchDocuments(
   offset = 0,
   limit = 50

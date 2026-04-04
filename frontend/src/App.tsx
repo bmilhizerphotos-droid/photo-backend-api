@@ -28,6 +28,7 @@ import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
 import OnThisDayView from "./components/OnThisDayView";
 import MapView from "./components/MapView";
+import PlacesView from "./components/PlacesView";
 import VideosView from "./components/VideosView";
 import BirthdayBanner from "./components/BirthdayBanner";
 import MemorySlideshow from "./components/MemorySlideshow";
@@ -617,11 +618,11 @@ export default function App() {
     if (view === "documents") return <DocumentsView onPhotoClick={(p) => setModalPhoto(p)} />;
     if (view === "screenshots") return <ScreenshotsView onPhotoClick={(p) => setModalPhoto(p)} />;
     if (view === "videos") return <VideosView />;
+    if (view === "places") return <PlacesView onPhotoClick={(p) => setModalPhoto(p)} />;
 
     // Placeholder views for future features
     const placeholders: Partial<Record<AppView, { emoji: string; title: string; desc: string }>> = {
       screenshots:     { emoji: "🖥️", title: "Screenshots",             desc: "Screenshots will appear here." },
-      places:          { emoji: "🗺️", title: "Places",                  desc: "Photos grouped by location will appear here." },
       videos:          { emoji: "🎬", title: "Videos",                  desc: "Your video files will appear here." },
       "recently-added":{ emoji: "🕐", title: "Recently added",          desc: "Photos added in the last 30 days." },
       shared:          { emoji: "🔗", title: "Shared",                  desc: "Photos shared with or by you will appear here." },
