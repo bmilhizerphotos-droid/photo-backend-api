@@ -4,6 +4,8 @@ import fs from "fs";
 import path from "path";
 import cors from "cors";
 import sharp from "sharp";
+import heicConvert from "heic-convert";
+import { Worker } from "worker_threads";
 import { dbGet, dbAll, dbRun } from "./db.js";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
@@ -248,6 +250,80 @@ function getPhotoPathOr404(res, filename) {
   return resolved;
 }
 
+// ── HEIC → JPEG conversion helper ────────────────────────────────────────────
+// Sharp on Windows cannot decode HEVC-compressed HEIC files (iPhone photos).
+// heic-convert uses libheif WASM which runs synchronously — it BLOCKS the
+// Node.js event loop if called on the main thread.  We offload it to a
+// worker_thread so the event loop stays free for all other requests.
+const HEIC_EXTS = new Set([".heic", ".heif"]);
+const HEIC_WORKER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "heic-worker.js");
+
+// Limit concurrent HEIC conversions to avoid spawning hundreds of threads.
+let activeHeicWorkers = 0;
+const MAX_HEIC_WORKERS = 6;
+const heicQueue = [];
+
+function runHeicWorker(filePath) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(HEIC_WORKER_PATH, { workerData: { filePath } });
+    worker.once("message", (msg) => {
+      if (msg.ok) resolve(Buffer.from(msg.jpeg));
+      else reject(new Error(msg.error));
+    });
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code !== 0) reject(new Error(`HEIC worker exited with code ${code}`));
+    });
+  });
+}
+
+function heicConvertWorker(filePath) {
+  return new Promise((resolve, reject) => {
+    const task = { filePath, resolve, reject };
+
+    const runNext = () => {
+      if (activeHeicWorkers >= MAX_HEIC_WORKERS) {
+        heicQueue.push(task);
+        return;
+      }
+      activeHeicWorkers++;
+      runHeicWorker(task.filePath)
+        .then(task.resolve)
+        .catch(task.reject)
+        .finally(() => {
+          activeHeicWorkers--;
+          if (heicQueue.length > 0) {
+            const next = heicQueue.shift();
+            activeHeicWorkers++;
+            runHeicWorker(next.filePath)
+              .then(next.resolve)
+              .catch(next.reject)
+              .finally(() => {
+                activeHeicWorkers--;
+              });
+          }
+        });
+    };
+
+    runNext();
+  });
+}
+
+async function toSharpInput(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (!HEIC_EXTS.has(ext)) {
+    // Not HEIC — return the path directly; Sharp reads it natively
+    return filePath;
+  }
+  // HEIC/HEIF — convert in a worker thread so event loop stays free.
+  try {
+    return await heicConvertWorker(filePath);
+  } catch (err) {
+    console.warn(`HEIC worker failed for ${filePath}: ${err.message} — falling back to Sharp native`);
+    return filePath; // Sharp may still handle JPEG-disguised-as-HEIC
+  }
+}
+
 // ---------------- LIST PHOTOS (PROTECTED) ----------------
 // Important change: fullUrl now points at /display/:id (always JPEG)
 app.get("/api/photos", authenticateToken, async (req, res) => {
@@ -292,6 +368,18 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
   }
 });
 
+// ── On-disk thumbnail cache ───────────────────────────────────────────────────
+// Generated thumbnails are saved to thumb-cache/{id}.jpg so repeat requests
+// are served from disk without re-running Sharp or heic-convert.
+const THUMB_CACHE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "thumb-cache");
+if (!fs.existsSync(THUMB_CACHE_DIR)) {
+  fs.mkdirSync(THUMB_CACHE_DIR, { recursive: true });
+}
+
+function thumbCachePath(id) {
+  return path.join(THUMB_CACHE_DIR, `${id}.jpg`);
+}
+
 // ---------------- THUMBNAILS (PROTECTED) ----------------
 app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
   try {
@@ -299,109 +387,92 @@ app.get("/thumbnails/:id", authenticateToken, async (req, res) => {
     if (id === null) {
       return res.status(400).json({ error: "Invalid photo ID" });
     }
-    
+
     const row = await dbGet("SELECT filename, full_path, thumbnail_path FROM photos WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "Photo not found" });
 
-    // Check if full-size image is requested via query parameter
-    const serveFull = req.query.full === 'true';
+    const serveFull = req.query.full === "true";
 
-    let filePath;
+    // ── Full-size branch ──────────────────────────────────────────────────────
     if (serveFull) {
-      // Serve full-size image
-      filePath = row.full_path;
-
-      // Security: Validate database path is within PHOTO_ROOT
-      if (filePath && !isPathWithinRoot(filePath)) {
-        console.error(`Γ¥î Security: Invalid full_path in database for ID ${id}`);
-        filePath = null;
-      }
-
-      if (!filePath || filePath.includes('.thumb.') || !fs.existsSync(filePath)) {
-        console.log(`ΓÜá∩╕Å  Searching for FULL image ID ${id}...`);
+      let filePath = row.full_path;
+      if (filePath && !isPathWithinRoot(filePath)) filePath = null;
+      if (!filePath || filePath.includes(".thumb.") || !fs.existsSync(filePath)) {
         filePath = findFileRecursive(PHOTO_ROOT, row.filename);
       }
-
       if (!filePath || !fs.existsSync(filePath)) {
-        console.error(`Γ¥î Full image not found for ID ${id}`);
         return res.status(404).json({ error: "Image not found" });
       }
-      
-      console.log(`Γ£à Serving FULL image ID ${id}: ${filePath}`);
-      
-      // Use Sharp to process full image
+
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Cache-Control", "private, no-cache, no-store, must-revalidate");
-      
+
       const maxW = Number(req.query.w || 2400);
-      
-      sharp(filePath)
+      const sharpInput = await toSharpInput(filePath);
+      sharp(sharpInput)
         .rotate()
         .resize({ width: maxW, withoutEnlargement: true })
         .jpeg({ quality: 85, progressive: true })
         .on("error", (e) => {
-          console.error(`Γ¥î Sharp error for ID ${id}:`, e.message);
           if (!res.headersSent) res.status(500).json({ error: "Failed to process image" });
         })
         .pipe(res);
-    } else {
-      // Serve thumbnail (original behavior)
-      filePath = row.thumbnail_path;
-
-      // Security: Validate database path is within PHOTO_ROOT
-      if (filePath && !isPathWithinRoot(filePath)) {
-        console.error(`Γ¥î Security: Invalid thumbnail_path in database for ID ${id}`);
-        filePath = null;
-      }
-
-      if (!filePath || !fs.existsSync(filePath)) {
-        const thumbName = `${row.filename}.thumb.jpg`;
-        filePath = findFileRecursive(PHOTO_ROOT, thumbName);
-      }
-
-      if (!filePath || !fs.existsSync(filePath)) {
-        let originalPath = row.full_path;
-
-        if (originalPath && !isPathWithinRoot(originalPath)) {
-          console.error(`Î“Â¥Ã® Security: Invalid full_path in database for ID ${id}`);
-          originalPath = null;
-        }
-
-        if (!originalPath || !fs.existsSync(originalPath)) {
-          originalPath = findFileRecursive(PHOTO_ROOT, row.filename);
-        }
-
-        if (!originalPath || !fs.existsSync(originalPath)) {
-          return res.status(404).json({ error: "Thumbnail not found" });
-        }
-
-        res.setHeader("Content-Type", "image/jpeg");
-        res.setHeader("Cache-Control", "public, max-age=3600");
-
-        sharp(originalPath)
-          .rotate()
-          .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: 80, progressive: true })
-          .on("error", (e) => {
-            console.error(`Î“Â¥Ã® Sharp thumbnail fallback error for ID ${id}:`, e.message);
-            if (!res.headersSent) res.status(500).json({ error: "Failed to generate thumbnail" });
-          })
-          .pipe(res);
-        return;
-      }
-
-      res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      
-      const stream = fs.createReadStream(filePath);
-      stream.on("error", (err) => {
-        console.error(`Γ¥î Stream error for thumbnail ID ${id}:`, err.message);
-        if (!res.headersSent) res.status(500).json({ error: "Failed to load thumbnail" });
-      });
-      stream.pipe(res);
+      return;
     }
+
+    // ── Thumbnail branch ──────────────────────────────────────────────────────
+    // 1. Check on-disk thumb cache (fastest)
+    const cached = thumbCachePath(id);
+    if (fs.existsSync(cached)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      fs.createReadStream(cached).pipe(res);
+      return;
+    }
+
+    // 2. Check DB-stored thumbnail_path (pre-generated .thumb.jpg alongside originals)
+    let existingThumb = row.thumbnail_path;
+    if (existingThumb && !isPathWithinRoot(existingThumb)) existingThumb = null;
+    if (existingThumb && fs.existsSync(existingThumb)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      fs.createReadStream(existingThumb).pipe(res);
+      return;
+    }
+
+    // 3. Generate thumbnail from the original file.
+    //    Prefer full_path from DB — avoids expensive findFileRecursive scan.
+    let originalPath = row.full_path;
+    if (originalPath && !isPathWithinRoot(originalPath)) originalPath = null;
+    if (!originalPath || !fs.existsSync(originalPath)) {
+      // full_path missing or stale — last resort: search the drive
+      originalPath = findFileRecursive(PHOTO_ROOT, row.filename);
+    }
+    if (!originalPath || !fs.existsSync(originalPath)) {
+      return res.status(404).json({ error: "Thumbnail not found" });
+    }
+
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+
+    const thumbInput = await toSharpInput(originalPath);
+
+    // Generate to buffer so we can cache AND send in one pass
+    const thumbBuf = await sharp(thumbInput)
+      .rotate()
+      .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 80, progressive: true })
+      .toBuffer();
+
+    // Write to cache (non-blocking)
+    fs.promises.writeFile(cached, thumbBuf).catch((e) =>
+      console.warn(`thumb-cache write failed for ${id}:`, e.message)
+    );
+
+    res.send(thumbBuf);
+
   } catch (err) {
-    console.error("Γ¥î Thumbnail/Image error:", err);
+    console.error("Thumbnail/Image error:", err);
     if (!res.headersSent) res.status(500).json({ error: "Failed to load image" });
   }
 });
@@ -472,7 +543,8 @@ app.get(["/display/:id", "/image/:id"], authenticateToken, async (req, res) => {
     
     console.log(`   Processing with Sharp (max width: ${maxW}px)...`);
 
-    sharp(filePath)
+    const displayInput = await toSharpInput(filePath);
+    sharp(displayInput)
       .rotate() // respects EXIF orientation
       .resize({ width: maxW, withoutEnlargement: true })
       .jpeg({ quality: 85, progressive: true })
@@ -715,7 +787,7 @@ async function searchFTS(terms, limit) {
   if (!terms || terms.length === 0) return [];
   const sanitized = [...new Set(terms.map(t => t.replace(/["*]/g, '').trim()).filter(t => t.length > 1))];
   if (!sanitized.length) return [];
-  const ftsQuery = sanitized.map(t => '"' + t + '"').join(' OR ');
+  const ftsQuery = sanitized.map(t => '"' + t + '"').join(' AND ');
   try {
     // Note: SQLite FTS5 requires the real table name in MATCH, not an alias
     return await dbAll(
@@ -852,12 +924,14 @@ app.get("/api/search", authenticateToken, async (req, res) => {
     const tagTerms   = gemini?.tagTerms?.length ? gemini.tagTerms  : concepts.slice(0, 4);
     const personName = gemini?.personName        || dbPerson || null;
     const dateRange  = gemini?.dateRange         || localDateRange;
-    const allTerms   = [...new Set([q, ...concepts])];
-    console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} date:${JSON.stringify(dateRange)} concepts:${concepts.slice(0,3).join(',')}`);
+    // Split the raw query into individual words for FTS AND logic.
+    // Do NOT include Gemini concepts — they would over-restrict results.
+    const ftsTerms   = [...new Set(q.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
+    console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} date:${JSON.stringify(dateRange)} concepts:${concepts.slice(0,3).join(',')} ftsTerms:${ftsTerms.join(',')}`);
 
     // All sources in parallel — fetch innerLimit so pagination works
     const [ftsRows, personRows, tagRows, dateRows] = await Promise.all([
-      searchFTS(allTerms, innerLimit),
+      searchFTS(ftsTerms, innerLimit),
       personName ? searchByPerson(personName, innerLimit) : Promise.resolve([]),
       searchByTags(tagTerms, innerLimit),
       dateRange  ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([])
