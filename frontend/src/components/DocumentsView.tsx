@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   fetchDocuments,
-  startDocumentScan,
   fetchDocumentScanStatus,
   DocumentScanStatus,
   Photo,
@@ -22,7 +21,6 @@ export default function DocumentsView({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<DocumentScanStatus | null>(null);
-  const [scanning, setScanning] = useState(false);
 
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
@@ -51,7 +49,6 @@ export default function DocumentsView({
     try {
       const s = await fetchDocumentScanStatus();
       setStatus(s);
-      setScanning(s.running);
     } catch {}
   }
 
@@ -59,17 +56,6 @@ export default function DocumentsView({
     loadFirst();
     loadStatus();
   }, []);
-
-  // Poll while scan is running
-  useEffect(() => {
-    if (!scanning) return;
-    const interval = setInterval(async () => {
-      await loadStatus();
-      await loadFirst();
-      if (!scanning) clearInterval(interval);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [scanning]);
 
   // ── Infinite scroll ──────────────────────────────────────────────────────
   const loadMore = useCallback(async () => {
@@ -91,17 +77,6 @@ export default function DocumentsView({
     rootMargin: '800px',
   });
 
-  // ── Start scan ───────────────────────────────────────────────────────────
-  async function handleScan() {
-    try {
-      await startDocumentScan();
-      setScanning(true);
-      await loadStatus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start scan');
-    }
-  }
-
   const scannedPct =
     status && status.total > 0
       ? Math.round((status.scanned / status.total) * 100)
@@ -119,9 +94,7 @@ export default function DocumentsView({
               : 'No documents detected yet'}
           </p>
         </div>
-
       </div>
-
 
       {/* Error */}
       {error && (
@@ -147,7 +120,7 @@ export default function DocumentsView({
           <p className="text-sm text-gray-500 max-w-sm">
             {status && status.scanned > 0
               ? 'No document photos were detected in your library.'
-              : 'Click "Scan for Documents" to have AI automatically detect photos of documents, receipts, invoices, and forms in your library. Uses the free Gemini AI tier — no cost.'}
+              : 'No documents have been detected yet.'}
           </p>
         </div>
       )}
