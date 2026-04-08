@@ -58,7 +58,7 @@ app.use((req, res, next) => {
 app.use(cors({ origin: allowedOrigins, credentials: true, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }));
 app.use(express.json());
 
-(async () => {
+async function runMigrations() {
   try {
     await dbRun("ALTER TABLE photos ADD COLUMN is_deleted INTEGER DEFAULT 0");
   } catch (err) {
@@ -135,7 +135,7 @@ app.use(express.json());
     added_at  TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (album_id, photo_id)
   )`);
-})();
+}
 
 // ---------------- AUTHENTICATION MIDDLEWARE ----------------
 async function authenticateToken(req, res, next) {
@@ -2379,6 +2379,18 @@ app.post("/api/photos/download-zip", authenticateToken, async (req, res) => {
 });
 
 // ---------------- START ----------------
-app.listen(PORT, () => {
-  console.log(`≡ƒÜÇ Backend running on http://127.0.0.1:${PORT}`);
-});
+async function start() {
+  try {
+    await runMigrations();
+    console.log("[startup] Migrations complete");
+  } catch (err) {
+    console.error("[startup] Migration failed, aborting:", err);
+    process.exit(1);
+  }
+
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`[startup] Backend listening on http://127.0.0.1:${PORT}`);
+  });
+}
+
+start();

@@ -41,12 +41,7 @@
     "vision-tags:batch": "node generate-vision-tags.js --limit 2000"
   },
   "dependencies": {
-    "@tensorflow/tfjs": "^4.22.0",
-    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
-    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
-    "@vladmandic/face-api": "^1.7.15",
     "archiver": "^7.0.1",
-    "canvas": "^2.11.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "exifr": "^7.1.3",
