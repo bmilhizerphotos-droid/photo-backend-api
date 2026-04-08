@@ -35,7 +35,10 @@
     "regen-memories": "node regenerate-memories.js",
     "regen-memories:test": "node regenerate-memories.js --test=3",
     "regen-memories:batch": "node regenerate-memories.js --limit=100",
-    "regen-memories:force": "node regenerate-memories.js --force"
+    "regen-memories:force": "node regenerate-memories.js --force",
+    "vision-tags": "node generate-vision-tags.js",
+    "vision-tags:test": "node generate-vision-tags.js --limit 20 --dry-run",
+    "vision-tags:batch": "node generate-vision-tags.js --limit 2000"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",

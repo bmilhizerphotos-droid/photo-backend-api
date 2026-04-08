@@ -834,6 +834,30 @@ async function searchByTags(terms, limit) {
   );
 }
 
+// Intersection: photos where a specific person appears AND one of the tag terms is present.
+// Used when both a personName and tag/concept terms are detected — gives true AND results.
+async function searchPersonWithTags(personName, tagTerms, limit) {
+  if (!personName || !tagTerms || tagTerms.length === 0) return [];
+  const placeholders = tagTerms.map(() => '?').join(',');
+  try {
+    return await dbAll(
+      `SELECT DISTINCT p.id, p.filename, p.created_at, p.date_taken, p.thumbnail_path, p.full_path
+       FROM photos p
+       JOIN photo_people pp ON pp.photo_id = p.id
+       JOIN people pe ON pe.id = pp.person_id
+       JOIN photo_tags pt ON pt.photo_id = p.id
+       JOIN tags t ON t.id = pt.tag_id
+       WHERE pe.name LIKE ? AND t.name IN (${placeholders}) AND p.is_deleted = 0
+       ORDER BY COALESCE(p.date_taken, p.created_at) DESC
+       LIMIT ?`,
+      ['%' + personName + '%', ...tagTerms, limit]
+    );
+  } catch (e) {
+    console.warn('searchPersonWithTags error:', e.message);
+    return [];
+  }
+}
+
 async function searchByDateRange(dateRange, limit) {
   if (!dateRange) return [];
   return dbAll(
@@ -930,11 +954,16 @@ app.get("/api/search", authenticateToken, async (req, res) => {
     console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} date:${JSON.stringify(dateRange)} concepts:${concepts.slice(0,3).join(',')} ftsTerms:${ftsTerms.join(',')}`);
 
     // All sources in parallel — fetch innerLimit so pagination works
-    const [ftsRows, personRows, tagRows, dateRows] = await Promise.all([
+    const [ftsRows, personRows, tagRows, dateRows, intersectionRows] = await Promise.all([
       searchFTS(ftsTerms, innerLimit),
       personName ? searchByPerson(personName, innerLimit) : Promise.resolve([]),
       searchByTags(tagTerms, innerLimit),
-      dateRange  ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([])
+      dateRange  ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([]),
+      // Intersection query: only runs when both a person name AND tag terms exist.
+      // Returns photos where that person appears AND one of the tag terms is present.
+      personName && tagTerms.length > 0
+        ? searchPersonWithTags(personName, tagTerms, innerLimit)
+        : Promise.resolve([])
     ]);
 
     // Semantic search — optional
@@ -950,8 +979,10 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       }
     } catch { /* optional */ }
 
-    // Merge: person > date > fts > tags > semantic, then slice to requested page
-    const combined = mergeResults([personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
+    // Merge: intersection first (true AND: person + tag), then person, date, fts, tags, semantic
+    // intersectionRows will be non-empty only when a personName + tagTerms both matched,
+    // so queries like "haley beach" return photos of Haley at the beach before anything else.
+    const combined = mergeResults([intersectionRows, personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
     const hasMore   = combined.length > offset + limit;
     const page      = combined.slice(offset, offset + limit);
 
@@ -973,7 +1004,7 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       limit,
       hasMore,
       photos,
-      meta: { personName, dateRange, concepts, sources: { person: personRows.length, date: dateRows.length, fts: ftsRows.length, tags: tagRows.length, semantic: semanticRows.length } }
+      meta: { personName, dateRange, concepts, sources: { intersection: intersectionRows.length, person: personRows.length, date: dateRows.length, fts: ftsRows.length, tags: tagRows.length, semantic: semanticRows.length } }
     });
   } catch (error) {
     console.error('Search error:', error);
