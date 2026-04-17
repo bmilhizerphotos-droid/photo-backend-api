@@ -45,6 +45,7 @@ import AddToAlbumModal from "./components/AddToAlbumModal";
 import { BulkActionBar } from "./components/BulkActionBar";
 import AdminView from "./components/AdminView";
 import FilterDrawer from "./components/FilterDrawer";
+import PhotoEditor from "./components/PhotoEditor";
 import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
 
@@ -86,6 +87,7 @@ export default function App() {
   const [selectedPhotoForTagging, setSelectedPhotoForTagging] = useState<Photo | null>(null);
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
+  const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
 
   // Scroll container ref — passed as root to IntersectionObserver so infinite scroll
   // works when <main> is the scroll container (not the viewport)
@@ -831,7 +833,20 @@ export default function App() {
         <ImageModal
           photo={modalPhoto}
           onClose={() => setModalPhoto(null)}
+          onEdit={(p) => { setEditingPhoto(p); setModalPhoto(null); }}
         />
+      {editingPhoto && (
+        <PhotoEditor
+          photo={editingPhoto}
+          onClose={() => setEditingPhoto(null)}
+          onSaved={() => {
+            // bust thumbnail cache then reopen the modal with a fresh URL
+            const bust = `?t=${Date.now()}`;
+            setModalPhoto({ ...editingPhoto, image_url: (editingPhoto.image_url ?? '').split('?')[0] + bust });
+            setEditingPhoto(null);
+          }}
+        />
+      )}
       {selectedPhotoForTagging && (
         <FaceTagModal
           photo={selectedPhotoForTagging}

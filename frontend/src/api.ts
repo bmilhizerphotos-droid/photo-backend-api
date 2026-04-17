@@ -1175,6 +1175,34 @@ export async function toggleUserApproval(uid: string, isApproved: boolean): Prom
   if (!res.ok) throw new Error('Failed to update approval');
 }
 
+// ── Photo Editor ────────────────────────────────
+
+export async function editAutoCorrect(photoId: number): Promise<{ brightness: number; contrast: number }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/edit-auto`, { method: "POST", body: JSON.stringify({ photoId }) }, 30000);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function editUpscale(photoId: number): Promise<{ done: boolean }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/edit-upscale`, { method: "POST", body: JSON.stringify({ photoId }) }, 90000);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export interface EditSaveParams {
+  photoId: number;
+  rotation: number;
+  brightness: number;
+  contrast: number;
+  crop: { x: number; y: number; w: number; h: number } | null;
+  useUpscaled: boolean;
+}
+
+export async function editSave(params: EditSaveParams): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/api/edit-save`, { method: "POST", body: JSON.stringify(params) }, 30000);
+  if (!res.ok) throw new Error(await res.text());
+}
+
 // ── Bulk Download ZIP ────────────────────────────
 export async function downloadPhotosAsZip(photoIds: number[]): Promise<void> {
   const url = API_BASE ? `${API_BASE}/api/photos/download-zip` : `/api/photos/download-zip`;

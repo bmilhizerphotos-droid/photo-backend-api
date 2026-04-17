@@ -11,9 +11,10 @@ import { PersonTagPicker } from "./PersonTagPicker";
 interface ImageModalProps {
   photo: Photo | null;
   onClose: () => void;
+  onEdit?: (photo: Photo) => void;
 }
 
-export function ImageModal({ photo, onClose }: ImageModalProps) {
+export function ImageModal({ photo, onClose, onEdit }: ImageModalProps) {
   const [taggedPeople, setTaggedPeople] = useState<Person[]>([]);
   const [loading, setLoading] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -96,6 +97,23 @@ export function ImageModal({ photo, onClose }: ImageModalProps) {
         className="relative max-w-[95vw] max-h-[95vh] w-full rounded-lg"
         onClick={(event) => event.stopPropagation()}
       >
+        {/* Action buttons */}
+        <div className="absolute top-2 right-2 z-10 flex gap-2">
+          {onEdit && (
+            <button
+              onClick={() => onEdit(photo)}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-black/60 text-white hover:bg-black/80 backdrop-blur-sm transition-colors"
+            >
+              ✏ Edit
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-black/60 text-white hover:bg-black/80 backdrop-blur-sm transition-colors"
+          >
+            ✕ Close
+          </button>
+        </div>
         <img
           src={photo.image_url}
           alt={photo.filename}
