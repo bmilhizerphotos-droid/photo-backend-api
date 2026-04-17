@@ -508,7 +508,7 @@ export default function App() {
     }
 
     return null;
-  }, [view, activePerson, searchInput, submitSearch]);
+  }, [view, activePerson, searchInput, submitSearch, showFilters, filters, filterOptions, selectMode, selectedIds]);
 
   const renderView = () => {
     if (view === "photos") {
