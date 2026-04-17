@@ -1112,6 +1112,37 @@ export async function generateMemoryNarrative(memoryId: number): Promise<{ title
   return res.json();
 }
 
+// ── Admin / Approval ────────────────────────────
+
+export interface AdminUser {
+  uid: string;
+  email: string;
+  displayName: string | null;
+  isApproved: boolean;
+  lastSeen: string | null;
+  createdAt: string;
+}
+
+export async function fetchMe(): Promise<{ isApproved: boolean; isAdmin: boolean; email: string; uid: string }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/me`);
+  if (!res.ok) throw new Error('Failed to fetch user status');
+  return res.json();
+}
+
+export async function fetchAdminUsers(): Promise<AdminUser[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/admin/users`);
+  if (!res.ok) throw new Error('Failed to fetch users');
+  return res.json();
+}
+
+export async function toggleUserApproval(uid: string, isApproved: boolean): Promise<void> {
+  const res = await fetchWithAuth(
+    `${API_BASE}/api/admin/users/${encodeURIComponent(uid)}/approval`,
+    { method: 'PATCH', body: JSON.stringify({ isApproved }) }
+  );
+  if (!res.ok) throw new Error('Failed to update approval');
+}
+
 // ── Bulk Download ZIP ────────────────────────────
 export async function downloadPhotosAsZip(photoIds: number[]): Promise<void> {
   const url = API_BASE ? `${API_BASE}/api/photos/download-zip` : `/api/photos/download-zip`;

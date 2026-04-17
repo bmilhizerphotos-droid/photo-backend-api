@@ -22,7 +22,8 @@ export type AppView =
   | "import"
   | "trash"
   | "duplicates"
-  | "status";
+  | "status"
+  | "admin";
 
 interface SidebarProps {
   view: AppView;
@@ -31,6 +32,7 @@ interface SidebarProps {
   selectedAlbumId: number | null;
   onSelectAlbum: (albumId: number) => void;
   onCreateAlbum: () => void;
+  isAdmin?: boolean;
 }
 
 function NavItem({
@@ -85,6 +87,7 @@ const SharedIcon        = () => <Icon d="M8.684 13.342C8.886 12.938 9 12.482 9 1
 const ImportIcon        = () => <Icon d={["M12 4v12m0 0l-4-4m4 4l4-4", "M4 20h16"]} />;
 const TrashIcon         = () => <Icon d={["M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"]} />;
 const DuplicatesIcon    = () => <Icon d={["M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"]} />;
+const AdminIcon         = () => <Icon d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />;
 const OnThisDayIcon     = () => <Icon d={["M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"]} />;
 
 const NAV_ITEMS: { id: AppView; label: string; icon: React.ReactNode }[] = [
@@ -106,7 +109,7 @@ const NAV_ITEMS: { id: AppView; label: string; icon: React.ReactNode }[] = [
   { id: "duplicates",    label: "Duplicates",              icon: <DuplicatesIcon /> },
 ];
 
-export default function Sidebar({ view, onChangeView }: SidebarProps) {
+export default function Sidebar({ view, onChangeView, isAdmin }: SidebarProps) {
   return (
     <aside className="w-60 bg-white border-r h-screen sticky top-0 overflow-y-auto flex-shrink-0">
       <div className="p-4">
@@ -121,6 +124,14 @@ export default function Sidebar({ view, onChangeView }: SidebarProps) {
               onClick={() => onChangeView(item.id)}
             />
           ))}
+          {(isAdmin || window.location.search.includes('debug=true')) && (
+            <NavItem
+              label="Admin"
+              icon={<AdminIcon />}
+              active={view === "admin"}
+              onClick={() => onChangeView("admin")}
+            />
+          )}
         </nav>
       </div>
     </aside>

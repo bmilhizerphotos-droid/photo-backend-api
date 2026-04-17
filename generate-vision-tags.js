@@ -22,6 +22,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import sharp from "sharp";
 
 // ── Manual .env parsing (no dotenv dependency — matches regenerate-memories.js) ──
 const __dir = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,9 @@ const getApiKey          = () => process.env.GEMINI_API_KEY || "";
 
 // Non-JPEG originals we CAN safely send as fallback (when no thumb cache entry)
 const SAFE_FALLBACK_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+
+// Formats Sharp can convert to JPEG on the fly (Gemini cannot accept these natively)
+const SHARP_CONVERT_EXTS = new Set([".heic", ".heif", ".tiff", ".tif", ".gif"]);
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -280,7 +284,7 @@ async function main() {
      FROM photos p
      WHERE p.is_deleted = 0
      ${resumeFilter}
-     ORDER BY p.id DESC
+     ORDER BY p.id ASC
      ${limitClause} ${offsetClause}`
   );
 
@@ -307,10 +311,12 @@ async function main() {
   let tagged = 0, tagsAdded = 0, skipped = 0, errors = 0;
 
   await runWithConcurrency(photos, CONCURRENCY, async (row) => {
-    // Determine image source: prefer thumb-cache, fall back to original for safe exts
-    const thumbPath = path.join(THUMB_CACHE_DIR, `${row.id}.jpg`);
-    let imagePath   = null;
-    let mimeType    = "image/jpeg";
+    // Determine image source: prefer thumb-cache, fall back to original for safe exts,
+    // or use Sharp to convert unsupported formats (HEIC, TIFF, GIF, etc.) to JPEG.
+    const thumbPath       = path.join(THUMB_CACHE_DIR, `${row.id}.jpg`);
+    let imagePath         = null;
+    let mimeType          = "image/jpeg";
+    let useSharpConvert   = false;
 
     if (fs.existsSync(thumbPath)) {
       imagePath = thumbPath;
@@ -319,6 +325,10 @@ async function main() {
       if (SAFE_FALLBACK_EXTS.has(ext)) {
         imagePath = row.full_path;
         mimeType  = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+      } else if (SHARP_CONVERT_EXTS.has(ext)) {
+        imagePath       = row.full_path;
+        mimeType        = "image/jpeg";
+        useSharpConvert = true;
       }
     }
 
@@ -329,7 +339,9 @@ async function main() {
     }
 
     try {
-      const buf    = fs.readFileSync(imagePath);
+      const buf    = useSharpConvert
+        ? await sharp(imagePath).rotate().jpeg({ quality: 80 }).toBuffer()
+        : fs.readFileSync(imagePath);
       const base64 = buf.toString("base64");
 
       await acquireRateLimit();

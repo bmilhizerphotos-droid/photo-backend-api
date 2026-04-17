@@ -49,6 +49,24 @@ module.exports = {
       }
     },
     {
+      name: 'vision-tagger',
+      script: 'generate-vision-tags.js',
+      cwd: 'C:\\Users\\bmilh\\photo-app\\photo-backend',
+      interpreter: 'node',
+      args: '--rpm 6 --concurrency 3',
+      watch: false,
+      autorestart: true,
+      max_restarts: 50,
+      min_uptime: '30s',
+      restart_delay: 5000,
+      error_file: 'C:\\Users\\bmilh\\.pm2\\logs\\vision-tagger-error.log',
+      out_file: 'C:\\Users\\bmilh\\.pm2\\logs\\vision-tagger-out.log',
+      time: true,
+      env: {
+        NODE_ENV: 'production'
+      }
+    },
+    {
       name: 'cloudflared',
       script: 'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe',
       args: 'tunnel --config C:\\Users\\bmilh\\.cloudflared\\config.yml run photo-backend',

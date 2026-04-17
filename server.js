@@ -24,6 +24,8 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+const ADMIN_EMAIL = "bmilhizerphotos@gmail.com";
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const PHOTO_ROOT = process.env.PHOTO_ROOT || "G:/Photos";
@@ -121,6 +123,16 @@ async function runMigrations() {
     if (purged?.changes > 0) console.log(`Auto-purged ${purged.changes} photos from trash (>${TRASH_RETENTION_DAYS} days old)`);
   } catch (err) { console.error("Trash auto-purge failed:", err); }
 
+  // App users table for approval tracking
+  await dbRun(`CREATE TABLE IF NOT EXISTS app_users (
+    uid TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    is_approved INTEGER NOT NULL DEFAULT 0,
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Albums schema
   await dbRun(`CREATE TABLE IF NOT EXISTS albums (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,15 +174,84 @@ async function authenticateToken(req, res, next) {
 
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
-    req.user = decodedToken; // Attach user info to request
-    console.log(`Γ£à Auth success: ${decodedToken.email}`);
+    req.user = decodedToken;
+
+    await dbRun(
+      `INSERT INTO app_users (uid, email, display_name, last_seen)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(uid) DO UPDATE SET
+         email = excluded.email,
+         display_name = excluded.display_name,
+         last_seen = datetime('now')`,
+      [decodedToken.uid, decodedToken.email || '', decodedToken.name || null]
+    );
+
+    if (decodedToken.email !== ADMIN_EMAIL) {
+      const userRow = await dbGet('SELECT is_approved FROM app_users WHERE uid = ?', [decodedToken.uid]);
+      if (!userRow?.is_approved) {
+        return res.status(403).json({ error: "Your request is pending approval." });
+      }
+    }
+
     next();
   } catch (error) {
-    console.error("Γ¥î Token verification failed:", error);
-    console.error(`   Received token: ${token.substring(0, 50)}...`);
+    if (!res.headersSent) {
+      return res.status(403).json({ error: "Forbidden: Invalid token" });
+    }
+  }
+}
+
+// verifyTokenOnly: verifies token + upserts user but does NOT enforce approval gate
+async function verifyTokenOnly(req, res, next) {
+  let token = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) token = authHeader.substring(7);
+  else if (req.query.token) token = req.query.token;
+  if (!token) return res.status(401).json({ error: "Unauthorized: No token provided" });
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = decodedToken;
+    await dbRun(
+      `INSERT INTO app_users (uid, email, display_name, last_seen)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(uid) DO UPDATE SET
+         email = excluded.email,
+         display_name = excluded.display_name,
+         last_seen = datetime('now')`,
+      [decodedToken.uid, decodedToken.email || '', decodedToken.name || null]
+    );
+    next();
+  } catch {
     return res.status(403).json({ error: "Forbidden: Invalid token" });
   }
 }
+
+function requireAdmin(req, res, next) {
+  if (req.user?.email === ADMIN_EMAIL) return next();
+  return res.status(403).json({ error: "Forbidden" });
+}
+
+// ---------------- CURRENT USER STATUS (NO APPROVAL GATE) ----------------
+app.get("/api/me", verifyTokenOnly, async (req, res) => {
+  try {
+    const rawEmail = req.user.email || '';
+    const email = rawEmail.toLowerCase().trim();
+    const isAdmin = email === ADMIN_EMAIL.toLowerCase().trim();
+    const userRow = await dbGet('SELECT is_approved FROM app_users WHERE uid = ?', [req.user.uid]);
+    const isApproved = isAdmin || Boolean(userRow?.is_approved);
+    console.log(`[/api/me] uid=${req.user.uid} rawEmail="${rawEmail}" isAdmin=${isAdmin} isApproved=${isApproved}`);
+    // Explicitly return isAdmin as a boolean so the client can rely on it
+    return res.json({
+      isApproved: isApproved,
+      isAdmin: isAdmin,
+      email: rawEmail,
+      uid: req.user.uid,
+    });
+  } catch (err) {
+    console.error('[/api/me] error:', err);
+    return res.status(500).json({ error: "Failed to fetch user status" });
+  }
+});
 
 // ---------------- HEALTH CHECK (NO AUTH REQUIRED) ----------------
 app.get("/health", async (req, res) => {
@@ -2375,6 +2456,46 @@ app.post("/api/photos/download-zip", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("POST /api/photos/download-zip error:", err);
     if (!res.headersSent) res.status(500).json({ error: "Failed to create ZIP" });
+  }
+});
+
+// ---------------- ADMIN ROUTES ----------------
+app.get("/api/admin/users", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const users = await dbAll(
+      `SELECT uid, email, display_name, is_approved, last_seen, created_at
+       FROM app_users
+       ORDER BY created_at DESC`
+    );
+    res.json(users.map(u => ({
+      uid: u.uid,
+      email: u.email,
+      displayName: u.display_name,
+      isApproved: Boolean(u.is_approved),
+      lastSeen: u.last_seen,
+      createdAt: u.created_at,
+    })));
+  } catch (err) {
+    console.error("GET /api/admin/users error:", err);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+app.patch("/api/admin/users/:uid/approval", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { isApproved } = req.body;
+    if (typeof isApproved !== 'boolean') {
+      return res.status(400).json({ error: "isApproved must be a boolean" });
+    }
+    await dbRun(
+      `UPDATE app_users SET is_approved = ? WHERE uid = ?`,
+      [isApproved ? 1 : 0, uid]
+    );
+    res.json({ uid, isApproved });
+  } catch (err) {
+    console.error("PATCH /api/admin/users/:uid/approval error:", err);
+    res.status(500).json({ error: "Failed to update approval" });
   }
 });
 

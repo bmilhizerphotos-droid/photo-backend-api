@@ -7,6 +7,7 @@ import {
   fetchAlbumPhotos,
   searchPhotos,
   bulkAction,
+  fetchMe,
   Photo,
   Album,
   Person,
@@ -37,12 +38,18 @@ import AlbumsGrid from "./components/AlbumsGrid";
 import CreateAlbumModal from "./components/CreateAlbumModal";
 import AddToAlbumModal from "./components/AddToAlbumModal";
 import { BulkActionBar } from "./components/BulkActionBar";
+import AdminView from "./components/AdminView";
 import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
+
+const ADMIN_EMAIL = "bmilhizerphotos@gmail.com";
 
 export default function App() {
   const { user, loading: authLoading, signingIn, error: authError, signIn, signOut } = useAuth();
   const [view, setView] = useState<AppView>("photos");
+  const [isApproved, setIsApproved] = useState<boolean | null>(null);
+  const [approvalChecked, setApprovalChecked] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumRefreshTrigger, setAlbumRefreshTrigger] = useState(0);
@@ -231,6 +238,29 @@ export default function App() {
 
     return () => { cancelled = true; };
   }, [searchQuery, searching, user]);
+
+  useEffect(() => {
+    if (!user) {
+      setIsApproved(null);
+      setApprovalChecked(false);
+      setIsAdmin(false);
+      return;
+    }
+    fetchMe()
+      .then((data) => {
+        console.log("Current User Status:", data);
+        setIsApproved(data.isApproved);
+        setApprovalChecked(true);
+        setIsAdmin(data.isAdmin === true);
+      })
+      .catch((err) => {
+        console.error("fetchMe failed:", err);
+        const adminFallback = (user.email ?? '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
+        setIsApproved(adminFallback);
+        setApprovalChecked(true);
+        setIsAdmin(adminFallback);
+      });
+  }, [user]);
 
   useEffect(() => {
     if (!user) {
@@ -631,6 +661,7 @@ export default function App() {
 
     if (view === "trash") return <TrashView user={user} />;
     if (view === "favorites") return <FavoritesView user={user} />;
+    if (view === "admin") return <AdminView />;
 
     const placeholder = placeholders[view];
     if (placeholder) {
@@ -680,10 +711,41 @@ export default function App() {
     );
   }
 
+  if (!approvalChecked) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
+          <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
+          <p className="mt-3 text-sm text-gray-600">Checking access…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isApproved) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
+          <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
+          <p className="mt-4 text-sm text-gray-700">Your request is pending approval.</p>
+          <p className="mt-1 text-xs text-gray-400">{user.email}</p>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="mt-6 inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar
         view={view}
+        isAdmin={isAdmin}
         onChangeView={(v) => {
           if (v !== "person-detail") {
             setActivePerson(null);
