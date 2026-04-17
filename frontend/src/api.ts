@@ -356,10 +356,42 @@ export interface SearchResult {
   meta: SearchMeta;
 }
 
-export async function searchPhotos(query: string, offset = 0, limit = 50): Promise<SearchResult> {
+export interface SearchFilters {
+  people: string[];
+  dateFrom: string;
+  dateTo: string;
+  tags: string[];
+}
+
+export const EMPTY_FILTERS: SearchFilters = { people: [], dateFrom: '', dateTo: '', tags: [] };
+
+export function hasActiveFilters(f: SearchFilters): boolean {
+  return f.people.length > 0 || f.tags.length > 0 || !!f.dateFrom || !!f.dateTo;
+}
+
+export interface FilterOptions {
+  people: string[];
+  tags: string[];
+}
+
+export async function fetchFilterOptions(): Promise<FilterOptions> {
+  const base = API_BASE || '';
+  const res = await fetchWithAuth(`${base}/api/filter-options`);
+  if (!res.ok) throw new Error('Failed to fetch filter options');
+  return res.json();
+}
+
+export async function searchPhotos(query: string, offset = 0, limit = 50, filters?: SearchFilters): Promise<SearchResult> {
+  const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(limit) });
+  if (filters) {
+    if (filters.people.length)  params.set('filterPeople',   filters.people.join(','));
+    if (filters.tags.length)    params.set('filterTags',     filters.tags.join(','));
+    if (filters.dateFrom)       params.set('filterDateFrom', filters.dateFrom);
+    if (filters.dateTo)         params.set('filterDateTo',   filters.dateTo);
+  }
   const url = API_BASE
-    ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}&offset=${offset}&limit=${limit}`
-    : `/api/search?q=${encodeURIComponent(query)}&offset=${offset}&limit=${limit}`;
+    ? `${API_BASE}/api/search?${params}`
+    : `/api/search?${params}`;
 
   try {
     const res = await fetchWithAuth(url, {}, 15000);

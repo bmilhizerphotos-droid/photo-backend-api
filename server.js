@@ -1004,6 +1004,67 @@ function mergeResults(sources, limit) {
   return out;
 }
 
+function parseCSV(val) {
+  if (!val) return [];
+  return String(val).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function buildFilterClause(filterPeople, filterTags, filterDateFrom, filterDateTo) {
+  const conditions = [];
+  const params = [];
+  if (filterDateFrom) {
+    conditions.push("COALESCE(p.date_taken, p.created_at) >= ?");
+    params.push(filterDateFrom);
+  }
+  if (filterDateTo) {
+    conditions.push("COALESCE(p.date_taken, p.created_at) <= ?");
+    params.push(filterDateTo + ' 23:59:59');
+  }
+  if (filterPeople.length > 0) {
+    const phs = filterPeople.map(() => '?').join(',');
+    conditions.push(`p.id IN (
+      SELECT pp2.photo_id FROM photo_people pp2
+      JOIN people per ON per.id = pp2.person_id
+      WHERE per.name IN (${phs})
+      GROUP BY pp2.photo_id HAVING COUNT(DISTINCT per.name) = ?
+    )`);
+    params.push(...filterPeople, filterPeople.length);
+  }
+  if (filterTags.length > 0) {
+    const phs = filterTags.map(() => '?').join(',');
+    conditions.push(`p.id IN (
+      SELECT pt2.photo_id FROM photo_tags pt2
+      JOIN tags t ON t.id = pt2.tag_id
+      WHERE t.name IN (${phs})
+      GROUP BY pt2.photo_id HAVING COUNT(DISTINCT t.name) = ?
+    )`);
+    params.push(...filterTags, filterTags.length);
+  }
+  return {
+    clause: conditions.length ? ' AND ' + conditions.join(' AND ') : '',
+    params,
+  };
+}
+
+app.get("/api/filter-options", authenticateToken, async (req, res) => {
+  try {
+    const [people, tags] = await Promise.all([
+      dbAll(`SELECT name FROM people WHERE photo_count > 0 ORDER BY photo_count DESC LIMIT 200`),
+      dbAll(`SELECT t.name, COUNT(pt.photo_id) AS cnt
+             FROM tags t JOIN photo_tags pt ON pt.tag_id = t.id
+             WHERE t.type = 'ai'
+             GROUP BY t.id ORDER BY cnt DESC LIMIT 300`),
+    ]);
+    res.json({
+      people: people.map(p => p.name),
+      tags: tags.map(t => t.name),
+    });
+  } catch (err) {
+    console.error("GET /api/filter-options error:", err);
+    res.status(500).json({ error: "Failed to fetch filter options" });
+  }
+});
+
 app.get("/api/search", authenticateToken, async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim();
@@ -1016,7 +1077,31 @@ app.get("/api/search", authenticateToken, async (req, res) => {
     const host = req.get("x-forwarded-host") || req.get("host");
     const base = `${protocol}://${host}`;
 
-    if (!q) return res.json({ query: q, mode: 'empty', photos: [], count: 0, offset, limit, hasMore: false, meta: {} });
+    const filterPeople   = parseCSV(req.query.filterPeople);
+    const filterTags     = parseCSV(req.query.filterTags);
+    const filterDateFrom = (req.query.filterDateFrom || '').toString().trim();
+    const filterDateTo   = (req.query.filterDateTo   || '').toString().trim();
+    const hasFilters = filterPeople.length > 0 || filterTags.length > 0 || !!filterDateFrom || !!filterDateTo;
+
+    if (!q && !hasFilters) return res.json({ query: q, mode: 'empty', photos: [], count: 0, offset, limit, hasMore: false, meta: {} });
+
+    // Filters-only mode: skip NLP/AI expansion, run direct SQL
+    if (!q && hasFilters) {
+      const { clause, params } = buildFilterClause(filterPeople, filterTags, filterDateFrom, filterDateTo);
+      const rows = await dbAll(
+        `SELECT DISTINCT p.id, p.filename, p.created_at, p.date_taken, p.thumbnail_path, p.full_path
+         FROM photos p
+         WHERE p.is_deleted = 0 ${clause}
+         ORDER BY COALESCE(p.date_taken, p.created_at) DESC
+         LIMIT ? OFFSET ?`,
+        [...params, limit + 1, offset]
+      );
+      const hasMore = rows.length > limit;
+      const page = rows.slice(0, limit);
+      const peopleRows = await fetchPeopleForPhotoIds(page.map(r => r.id));
+      const photos = buildPhotoResponse(page, peopleRows, base);
+      return res.json({ query: '', mode: 'filter', count: photos.length, offset, limit, hasMore, photos, meta: {} });
+    }
 
     // Gemini expansion, local date parsing, and DB person lookup in parallel
     const [gemini, localDateRange, dbPerson] = await Promise.all([
@@ -1064,8 +1149,18 @@ app.get("/api/search", authenticateToken, async (req, res) => {
     // intersectionRows will be non-empty only when a personName + tagTerms both matched,
     // so queries like "haley beach" return photos of Haley at the beach before anything else.
     const combined = mergeResults([intersectionRows, personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
-    const hasMore   = combined.length > offset + limit;
-    const page      = combined.slice(offset, offset + limit);
+
+    // When filters are also active, post-filter the merged results
+    let finalCombined = combined;
+    if (hasFilters) {
+      const { clause, params } = buildFilterClause(filterPeople, filterTags, filterDateFrom, filterDateTo);
+      const filterRows = await dbAll(`SELECT p.id FROM photos p WHERE p.is_deleted = 0 ${clause}`, params);
+      const filterIdSet = new Set(filterRows.map(r => r.id));
+      finalCombined = combined.filter(r => filterIdSet.has(r.id));
+    }
+
+    const hasMore   = finalCombined.length > offset + limit;
+    const page      = finalCombined.slice(offset, offset + limit);
 
     const peopleRows = await fetchPeopleForPhotoIds(page.map(r => r.id));
     const photos = buildPhotoResponse(page, peopleRows, base);

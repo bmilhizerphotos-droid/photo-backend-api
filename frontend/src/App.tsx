@@ -6,12 +6,17 @@ import {
   fetchPersonPhotos,
   fetchAlbumPhotos,
   searchPhotos,
+  fetchFilterOptions,
   bulkAction,
   fetchMe,
   Photo,
   Album,
   Person,
   SearchMeta,
+  SearchFilters,
+  FilterOptions,
+  EMPTY_FILTERS,
+  hasActiveFilters,
 } from "./api";
 import { useInfinitePhotos } from "./hooks/useInfinitePhotos";
 import { useIntersectionSentinel } from "./hooks/useIntersectionSentinel";
@@ -39,6 +44,7 @@ import CreateAlbumModal from "./components/CreateAlbumModal";
 import AddToAlbumModal from "./components/AddToAlbumModal";
 import { BulkActionBar } from "./components/BulkActionBar";
 import AdminView from "./components/AdminView";
+import FilterDrawer from "./components/FilterDrawer";
 import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
 
@@ -50,6 +56,11 @@ export default function App() {
   const [isApproved, setIsApproved] = useState<boolean | null>(null);
   const [approvalChecked, setApprovalChecked] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterOptions, setFilterOptions] = useState<FilterOptions>({ people: [], tags: [] });
+  const searchFiltersRef = useRef<SearchFilters>(EMPTY_FILTERS);
 
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumRefreshTrigger, setAlbumRefreshTrigger] = useState(0);
@@ -119,7 +130,7 @@ export default function App() {
     setSearchQuery(searchInput.trim());
   }, [searchInput]);
 
-  const searching = view === "photos" && searchQuery.trim().length > 0;
+  const searching = view === "photos" && (searchQuery.trim().length > 0 || hasActiveFilters(filters));
 
   const sentinelRef = useIntersectionSentinel({
     enabled: !!user && view === "photos" && !searching && hasMore && !photosLoading,
@@ -134,6 +145,12 @@ export default function App() {
       return;
     }
     fetchAlbums().then(setAlbums).catch(() => setAlbums([]));
+  }, [user]);
+
+  // Load filter options (people + tags) once when user authenticates
+  useEffect(() => {
+    if (!user) { setFilterOptions({ people: [], tags: [] }); return; }
+    fetchFilterOptions().then(setFilterOptions).catch(() => {});
   }, [user]);
 
   // Load "People" when view is people
@@ -171,7 +188,7 @@ export default function App() {
     searchInFlight.current = true;
     setSearchLoadingMore(true);
     try {
-      const result = await searchPhotos(query, searchOffsetRef.current);
+      const result = await searchPhotos(query, searchOffsetRef.current, 50, searchFiltersRef.current);
       if (searchQueryRef.current !== query) return; // stale — query changed
       setSearchResults((prev) => [...prev, ...result.photos]);
       searchOffsetRef.current += result.photos.length;
@@ -208,6 +225,7 @@ export default function App() {
     const query = searchQuery;
     // Update refs immediately so loadMoreSearch always sees current values
     searchQueryRef.current = query;
+    searchFiltersRef.current = filters;
     searchOffsetRef.current = 0;
     searchHasMoreRef.current = false;
     searchInFlight.current = false;
@@ -218,7 +236,7 @@ export default function App() {
     setSearchMeta(null);
     setSearchHasMore(false);
 
-    searchPhotos(query, 0)
+    searchPhotos(query, 0, 50, filters)
       .then((result) => {
         if (cancelled || searchQueryRef.current !== query) return;
         setSearchResults(result.photos);
@@ -237,7 +255,7 @@ export default function App() {
       });
 
     return () => { cancelled = true; };
-  }, [searchQuery, searching, user]);
+  }, [searchQuery, filters, searching, user]);
 
   useEffect(() => {
     if (!user) {
@@ -402,6 +420,7 @@ export default function App() {
     }
 
     if (view === "photos") {
+      const activeFilterCount = filters.people.length + filters.tags.length + (filters.dateFrom ? 1 : 0) + (filters.dateTo ? 1 : 0);
       return (
         <div className="mb-4 flex flex-col gap-2">
           <form
@@ -426,12 +445,35 @@ export default function App() {
               </button>
             )}
             <button
+              type="button"
+              onClick={() => setShowFilters(v => !v)}
+              className={`relative px-4 py-2 text-sm font-medium rounded-full border transition-colors ${
+                showFilters || activeFilterCount > 0
+                  ? "bg-blue-50 border-blue-400 text-blue-700"
+                  : "bg-white border-gray-300 text-gray-600 hover:border-blue-400"
+              }`}
+              title="Filters"
+            >
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+            <button
               type="submit"
               className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full transition-colors"
             >
               Search
             </button>
           </form>
+          <FilterDrawer
+            open={showFilters}
+            options={filterOptions}
+            filters={filters}
+            onChange={(f) => setFilters(f)}
+          />
           {/* Select mode toggle */}
           {selectMode ? (
             <div className="flex items-center gap-3 px-1">
@@ -758,6 +800,8 @@ export default function App() {
           if (v !== "photos") {
             setSearchInput("");
             setSearchQuery("");
+            setFilters(EMPTY_FILTERS);
+            setShowFilters(false);
           }
           setSelectedIds(new Set());
           setSelectModeActive(false);
