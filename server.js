@@ -2561,52 +2561,26 @@ app.post("/api/edit-auto", authenticateToken, async (req, res) => {
     const { photoId } = req.body ?? {};
     if (!photoId) return res.status(400).json({ error: "photoId required" });
 
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(503).json({ error: "OPENAI_API_KEY not configured in .env" });
-    }
-
     const photo = await dbGet("SELECT full_path FROM photos WHERE id = ? AND is_deleted = 0", [photoId]);
     if (!photo?.full_path) return res.status(404).json({ error: "Photo not found" });
 
-    // Prefer cached thumbnail (smaller = fewer tokens)
+    // Prefer thumbnail (faster to read, same histogram)
     const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
     const imgPath   = fs.existsSync(thumbPath) ? thumbPath : photo.full_path;
-    const base64    = fs.readFileSync(imgPath).toString("base64");
 
-    const apiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}`, detail: "low" } },
-            { type: "text", text: 'Analyze the exposure and contrast of this photo. Reply with ONLY a JSON object: {"brightness": <0.5–2.0>, "contrast": <0.5–2.0>} where 1.0 means no change. Suggest values that would make the photo look its best.' }
-          ]
-        }],
-        max_tokens: 60,
-        temperature: 0,
-      }),
-      signal: AbortSignal.timeout(20000),
-    });
+    // Compute per-channel statistics from the image histogram
+    const stats    = await sharp(imgPath).stats();
+    const channels = stats.channels; // [{mean, std, min, max}, ...]
 
-    if (!apiRes.ok) {
-      const err = await apiRes.text();
-      return res.status(502).json({ error: `OpenAI error: ${err.slice(0, 200)}` });
-    }
+    const meanLum = channels.reduce((s, c) => s + c.mean, 0) / channels.length;
+    const stdLum  = channels.reduce((s, c) => s + c.std,  0) / channels.length;
 
-    const data  = await apiRes.json();
-    const text  = data.choices?.[0]?.message?.content?.trim() ?? "";
-    const match = text.match(/\{[^}]+\}/);
-    if (!match) return res.status(502).json({ error: "Could not parse AI response" });
+    // Target: mean ~128 (mid-exposure), std ~55 (good contrast spread)
+    const clamp      = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const brightness = clamp(128 / Math.max(1, meanLum), 0.5, 2.0);
+    const contrast   = clamp(55  / Math.max(1, stdLum),  0.5, 2.0);
 
-    const suggested  = JSON.parse(match[0]);
-    const clamp      = (v, lo, hi) => Math.max(lo, Math.min(hi, parseFloat(v) || 1));
-    const brightness = clamp(suggested.brightness, 0.5, 2.0);
-    const contrast   = clamp(suggested.contrast,   0.5, 2.0);
-
-    res.json({ brightness, contrast });
+    res.json({ brightness: +brightness.toFixed(2), contrast: +contrast.toFixed(2) });
   } catch (err) {
     console.error("POST /api/edit-auto error:", err);
     res.status(500).json({ error: String(err.message) });
@@ -2618,54 +2592,18 @@ app.post("/api/edit-upscale", authenticateToken, async (req, res) => {
     const { photoId } = req.body ?? {};
     if (!photoId) return res.status(400).json({ error: "photoId required" });
 
-    if (!process.env.REPLICATE_API_TOKEN) {
-      return res.status(503).json({ error: "REPLICATE_API_TOKEN not configured in .env" });
-    }
-
     const photo = await dbGet("SELECT full_path FROM photos WHERE id = ? AND is_deleted = 0", [photoId]);
     if (!photo?.full_path) return res.status(404).json({ error: "Photo not found" });
 
-    // Use thumbnail if available (faster upload, model downscales anyway)
-    const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
-    const imgPath   = fs.existsSync(thumbPath) ? thumbPath : photo.full_path;
-    const base64    = fs.readFileSync(imgPath).toString("base64");
+    const meta      = await sharp(photo.full_path).metadata();
+    const newWidth  = (meta.width  ?? 1000) * 2;
+    const newHeight = (meta.height ?? 1000) * 2;
+    const cachePath = path.join(THUMB_CACHE_DIR, `${photoId}-upscaled.jpg`);
 
-    // Start Real-ESRGAN prediction on Replicate
-    const startRes = await fetch("https://api.replicate.com/v1/predictions", {
-      method: "POST",
-      headers: { "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        version: "42fed1c4974146d4d2414e2be2c5277c7fcf05fcc3a73abf41610695738c1d7b",
-        input: { image: `data:image/jpeg;base64,${base64}`, scale: 4, face_enhance: false },
-      }),
-    });
-
-    if (!startRes.ok) {
-      const err = await startRes.text();
-      return res.status(502).json({ error: `Replicate error: ${err.slice(0, 200)}` });
-    }
-
-    let prediction = await startRes.json();
-
-    // Poll until done (max 90s)
-    const deadline = Date.now() + 90_000;
-    while (prediction.status !== "succeeded" && prediction.status !== "failed") {
-      if (Date.now() > deadline) return res.status(504).json({ error: "Upscale timed out" });
-      await new Promise(r => setTimeout(r, 2500));
-      const pollRes = await fetch(prediction.urls.get, {
-        headers: { "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}` },
-      });
-      prediction = await pollRes.json();
-    }
-
-    if (prediction.status !== "succeeded") {
-      return res.status(500).json({ error: "Upscale failed" });
-    }
-
-    // Download and cache the upscaled result
-    const upscaledBuf  = Buffer.from(await (await fetch(prediction.output)).arrayBuffer());
-    const cachePath    = path.join(THUMB_CACHE_DIR, `${photoId}-upscaled.jpg`);
-    fs.writeFileSync(cachePath, upscaledBuf);
+    await sharp(photo.full_path)
+      .resize(newWidth, newHeight, { kernel: "lanczos3", fit: "fill" })
+      .jpeg({ quality: 92 })
+      .toFile(cachePath);
 
     res.json({ done: true });
   } catch (err) {

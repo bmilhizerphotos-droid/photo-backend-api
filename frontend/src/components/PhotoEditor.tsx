@@ -98,7 +98,7 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
   // ── AI auto-correct ──────────────────────────────────────────────────────────
   const handleAiAuto = async () => {
     setAiLoading(true);
-    setStatus({ msg: "Analyzing photo with AI…" });
+    setStatus({ msg: "Analyzing image histogram…" });
     try {
       const { brightness, contrast } = await editAutoCorrect(photo.id);
       pushEdit({ brightness, contrast });
@@ -113,11 +113,11 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
   // ── Upscale ──────────────────────────────────────────────────────────────────
   const handleUpscale = async () => {
     setUpscaleLoading(true);
-    setStatus({ msg: "Upscaling 4× (may take ~30s)…" });
+    setStatus({ msg: "Upscaling 2× with Lanczos3…" });
     try {
       await editUpscale(photo.id);
       pushEdit({ useUpscaled: true });
-      setStatus({ msg: "Upscale ready — will apply on Save" });
+      setStatus({ msg: "2× upscale ready — will apply on Save" });
     } catch (e: any) {
       setStatus({ msg: e.message, err: true });
     } finally {
@@ -284,7 +284,7 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
           disabled={aiLoading || saving}
           className="px-3 py-1 text-xs rounded border border-gray-600 hover:bg-gray-700 disabled:opacity-40 transition-colors"
         >
-          {aiLoading ? "Analyzing…" : "✨ AI Auto-Correct"}
+          {aiLoading ? "Analyzing…" : "✨ Auto-Correct"}
         </button>
 
         {/* AI Upscale */}
@@ -295,7 +295,7 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
             current.useUpscaled ? "border-green-500 text-green-400" : "border-gray-600 hover:bg-gray-700"
           }`}
         >
-          {upscaleLoading ? "Upscaling…" : current.useUpscaled ? "✓ Upscaled 4×" : "⬆ AI Upscale 4×"}
+          {upscaleLoading ? "Upscaling…" : current.useUpscaled ? "✓ Upscaled 2×" : "⬆ Upscale 2×"}
         </button>
       </div>
     </div>
