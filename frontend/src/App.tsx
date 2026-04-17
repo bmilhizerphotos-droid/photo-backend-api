@@ -133,25 +133,25 @@ export default function App() {
   const searching = view === "photos" && (searchQuery.trim().length > 0 || hasActiveFilters(filters));
 
   const sentinelRef = useIntersectionSentinel({
-    enabled: !!user && view === "photos" && !searching && hasMore && !photosLoading,
+    enabled: !!user && isApproved === true && view === "photos" && !searching && hasMore && !photosLoading,
     onIntersect: loadMore,
     root: mainEl,
   });
 
-  // Load albums (sidebar) on mount
+  // Load albums (sidebar) on mount — only once approved
   useEffect(() => {
-    if (!user) {
+    if (!user || !isApproved) {
       setAlbums([]);
       return;
     }
     fetchAlbums().then(setAlbums).catch(() => setAlbums([]));
-  }, [user]);
+  }, [user, isApproved]);
 
-  // Load filter options (people + tags) once when user authenticates
+  // Load filter options (people + tags) once when user authenticates — only once approved
   useEffect(() => {
-    if (!user) { setFilterOptions({ people: [], tags: [] }); return; }
+    if (!user || !isApproved) { setFilterOptions({ people: [], tags: [] }); return; }
     fetchFilterOptions().then(setFilterOptions).catch(() => {});
-  }, [user]);
+  }, [user, isApproved]);
 
   // Load "People" when view is people
   useEffect(() => {
@@ -292,9 +292,11 @@ export default function App() {
       return;
     }
 
-    resetPhotos();
-    loadMore();
-  }, [user, resetPhotos, loadMore]);
+    if (isApproved === true) {
+      resetPhotos();
+      loadMore();
+    }
+  }, [user, isApproved, resetPhotos, loadMore]);
 
   const openPhoto = useCallback((p: Photo, e?: React.MouseEvent) => {
     // In select mode, or ctrl/cmd+click → toggle selection
