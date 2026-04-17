@@ -53,8 +53,7 @@ const ADMIN_EMAIL = "bmilhizerphotos@gmail.com";
 export default function App() {
   const { user, loading: authLoading, signingIn, error: authError, signIn, signOut } = useAuth();
   const [view, setView] = useState<AppView>("photos");
-  const [isApproved, setIsApproved] = useState<boolean | null>(null);
-  const [approvalChecked, setApprovalChecked] = useState(false);
+  const [isApproved, setIsApproved] = useState<boolean | null>(null); // null=checking, false=denied, true=approved
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
@@ -260,22 +259,19 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setIsApproved(null);
-      setApprovalChecked(false);
       setIsAdmin(false);
       return;
     }
+    setIsApproved(null); // reset to "checking" on every user change
     fetchMe()
       .then((data) => {
-        console.log("Current User Status:", data);
-        setIsApproved(data.isApproved);
-        setApprovalChecked(true);
+        setIsApproved(data.isApproved === true);
         setIsAdmin(data.isAdmin === true);
       })
       .catch((err) => {
         console.error("fetchMe failed:", err);
         const adminFallback = (user.email ?? '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
         setIsApproved(adminFallback);
-        setApprovalChecked(true);
         setIsAdmin(adminFallback);
       });
   }, [user]);
@@ -722,18 +718,8 @@ export default function App() {
     return <div className="text-gray-400">Select a view</div>;
   };
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-        <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
-          <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
-          <p className="mt-3 text-sm text-gray-600">Checking your sign-in status...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!user) {
+  // 1. Not logged in
+  if (!authLoading && !user) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
@@ -755,24 +741,28 @@ export default function App() {
     );
   }
 
-  if (!approvalChecked) {
+  // 2. Firebase auth loading OR approval check in flight
+  if (authLoading || isApproved === null) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
           <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
-          <p className="mt-3 text-sm text-gray-600">Checking access…</p>
+          <div className="mt-4 flex justify-center">
+            <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!isApproved) {
+  // 3. Checked and denied
+  if (isApproved === false) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="bg-white border rounded-2xl shadow-sm p-8 max-w-md w-full text-center">
           <h1 className="text-2xl font-semibold text-gray-900">Family Photos</h1>
-          <p className="mt-4 text-sm text-gray-700">Your request is pending approval.</p>
-          <p className="mt-1 text-xs text-gray-400">{user.email}</p>
+          <p className="mt-4 text-sm text-gray-700">Your account is pending approval by the administrator.</p>
+          <p className="mt-1 text-xs text-gray-400">{user?.email}</p>
           <button
             type="button"
             onClick={() => void signOut()}
@@ -784,6 +774,8 @@ export default function App() {
       </div>
     );
   }
+
+  // 4. isApproved === true — fall through to full app
 
   return (
     <div className="flex min-h-screen bg-gray-50">
