@@ -345,9 +345,10 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
 
 export interface SearchMeta {
   personName: string | null;
+  contextKeywords: string[];
   dateRange: { start: string; end: string } | null;
   concepts: string[];
-  sources: { person: number; date: number; fts: number; tags: number; semantic: number };
+  sources: { strict?: number; person: number; date: number; fts: number; tags: number; semantic: number };
 }
 
 export interface SearchResult {

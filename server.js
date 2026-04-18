@@ -924,26 +924,40 @@ async function searchByTags(terms, limit) {
   );
 }
 
-// Intersection: photos where a specific person appears AND one of the tag terms is present.
-// Used when both a personName and tag/concept terms are detected — gives true AND results.
-async function searchPersonWithTags(personName, tagTerms, limit) {
-  if (!personName || !tagTerms || tagTerms.length === 0) return [];
-  const placeholders = tagTerms.map(() => '?').join(',');
+// Strict AND intersection: photos where a person appears AND every context term matches
+// in caption, keywords, filename, or tags. Prevents "haley beach" from returning all Haley
+// photos — every non-person keyword must be found somewhere in that photo's indexed text.
+async function searchPersonAndContext(personName, contextTerms, limit) {
+  if (!personName || !contextTerms || contextTerms.length === 0) return [];
+  // Build one sub-clause per context term (each must match independently → AND logic)
+  const termClauses = contextTerms.map(() => `(
+    pc.caption  LIKE ? OR
+    pc.keywords LIKE ? OR
+    p.filename  LIKE ? OR
+    EXISTS (
+      SELECT 1 FROM photo_tags pt2
+      JOIN tags t2 ON t2.id = pt2.tag_id
+      WHERE pt2.photo_id = p.id AND t2.name LIKE ?
+    )
+  )`).join(' AND ');
+  const termParams = contextTerms.flatMap(t => {
+    const like = `%${t}%`;
+    return [like, like, like, like];
+  });
   try {
     return await dbAll(
       `SELECT DISTINCT p.id, p.filename, p.created_at, p.date_taken, p.thumbnail_path, p.full_path
        FROM photos p
        JOIN photo_people pp ON pp.photo_id = p.id
        JOIN people pe ON pe.id = pp.person_id
-       JOIN photo_tags pt ON pt.photo_id = p.id
-       JOIN tags t ON t.id = pt.tag_id
-       WHERE pe.name LIKE ? AND t.name IN (${placeholders}) AND p.is_deleted = 0
+       LEFT JOIN photo_captions pc ON pc.photo_id = p.id
+       WHERE pe.name LIKE ? AND p.is_deleted = 0 AND ${termClauses}
        ORDER BY COALESCE(p.date_taken, p.created_at) DESC
        LIMIT ?`,
-      ['%' + personName + '%', ...tagTerms, limit]
+      [`%${personName}%`, ...termParams, limit]
     );
   } catch (e) {
-    console.warn('searchPersonWithTags error:', e.message);
+    console.warn('searchPersonAndContext error:', e.message);
     return [];
   }
 }
@@ -1124,21 +1138,31 @@ app.get("/api/search", authenticateToken, async (req, res) => {
     const personName = gemini?.personName        || dbPerson || null;
     const dateRange  = gemini?.dateRange         || localDateRange;
     // Split the raw query into individual words for FTS AND logic.
-    // Do NOT include Gemini concepts — they would over-restrict results.
     const ftsTerms   = [...new Set(q.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
-    console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} date:${JSON.stringify(dateRange)} concepts:${concepts.slice(0,3).join(',')} ftsTerms:${ftsTerms.join(',')}`);
 
-    // All sources in parallel — fetch innerLimit so pagination works
-    const [ftsRows, personRows, tagRows, dateRows, intersectionRows] = await Promise.all([
-      searchFTS(ftsTerms, innerLimit),
-      personName ? searchByPerson(personName, innerLimit) : Promise.resolve([]),
+    // Context keywords: query words that are NOT part of the detected person name.
+    // Used for strict AND mode — "haley beach" → contextKeywords=["beach"]
+    const personNameWords = personName ? personName.toLowerCase().split(/\s+/) : [];
+    const contextKeywords = ftsTerms.filter(t =>
+      !personNameWords.some(pw => pw.includes(t) || t.includes(pw))
+    );
+    // Strict mode: person detected + at least one non-person keyword → must satisfy both
+    const strictPersonContext = !!personName && contextKeywords.length > 0;
+
+    console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} strict:${strictPersonContext} context:[${contextKeywords.join(',')}] date:${JSON.stringify(dateRange)}`);
+
+    // All sources in parallel — fetch innerLimit so pagination works.
+    // In strict mode: use searchPersonAndContext (true AND) and skip broad personRows.
+    const [strictRows, personRows, ftsRows, tagRows, dateRows] = await Promise.all([
+      strictPersonContext
+        ? searchPersonAndContext(personName, contextKeywords, innerLimit)
+        : Promise.resolve([]),
+      !strictPersonContext && personName
+        ? searchByPerson(personName, innerLimit)
+        : Promise.resolve([]),
+      searchFTS(strictPersonContext ? contextKeywords : ftsTerms, innerLimit),
       searchByTags(tagTerms, innerLimit),
-      dateRange  ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([]),
-      // Intersection query: only runs when both a person name AND tag terms exist.
-      // Returns photos where that person appears AND one of the tag terms is present.
-      personName && tagTerms.length > 0
-        ? searchPersonWithTags(personName, tagTerms, innerLimit)
-        : Promise.resolve([])
+      dateRange ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([]),
     ]);
 
     // Semantic search — optional
@@ -1154,10 +1178,12 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       }
     } catch { /* optional */ }
 
-    // Merge: intersection first (true AND: person + tag), then person, date, fts, tags, semantic
-    // intersectionRows will be non-empty only when a personName + tagTerms both matched,
-    // so queries like "haley beach" return photos of Haley at the beach before anything else.
-    const combined = mergeResults([intersectionRows, personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
+    // Merge results.
+    // Strict mode (person + context): strict intersection first, then FTS fallback.
+    // Normal mode: person first, then date/fts/tags/semantic.
+    const combined = strictPersonContext
+      ? mergeResults([strictRows, ftsRows, dateRows, semanticRows], innerLimit)
+      : mergeResults([personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
 
     // When filters are also active, post-filter the merged results
     let finalCombined = combined;
@@ -1175,6 +1201,7 @@ app.get("/api/search", authenticateToken, async (req, res) => {
     const photos = buildPhotoResponse(page, peopleRows, base);
 
     const sources = [];
+    if (strictRows.length > 0)    sources.push('person+context');
     if (personRows.length > 0)    sources.push('person');
     if (dateRows.length > 0)      sources.push('date');
     if (ftsRows.length > 0)       sources.push('fts');
@@ -1189,7 +1216,13 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       limit,
       hasMore,
       photos,
-      meta: { personName, dateRange, concepts, sources: { intersection: intersectionRows.length, person: personRows.length, date: dateRows.length, fts: ftsRows.length, tags: tagRows.length, semantic: semanticRows.length } }
+      meta: {
+        personName,
+        contextKeywords: strictPersonContext ? contextKeywords : [],
+        dateRange,
+        concepts,
+        sources: { strict: strictRows.length, person: personRows.length, date: dateRows.length, fts: ftsRows.length, tags: tagRows.length, semantic: semanticRows.length }
+      }
     });
   } catch (error) {
     console.error('Search error:', error);

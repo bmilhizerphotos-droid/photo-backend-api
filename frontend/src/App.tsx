@@ -58,6 +58,7 @@ import { MergePeopleModal } from "./components/MergePeopleModal";
 import { FaceExpandModal } from "./components/FaceExpandModal";
 import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
+import SearchView from "./components/SearchView";
 
 const ADMIN_EMAIL = "bmilhizerphotos@gmail.com";
 
@@ -147,6 +148,17 @@ export default function App() {
   // Submit search (called by form onSubmit and search button)
   const submitSearch = useCallback(() => {
     setSearchQuery(searchInput.trim());
+  }, [searchInput]);
+
+  // Remove a single term from the search query (used by chip × buttons)
+  const removeTerm = useCallback((term: string) => {
+    const updated = searchInput
+      .split(/\s+/)
+      .filter(w => w.toLowerCase() !== term.toLowerCase())
+      .join(" ")
+      .trim();
+    setSearchInput(updated);
+    setSearchQuery(updated);
   }, [searchInput]);
 
   const searching = view === "photos" && (searchQuery.trim().length > 0 || hasActiveFilters(filters));
@@ -589,49 +601,18 @@ export default function App() {
   const renderView = () => {
     if (view === "photos") {
       if (searching) {
-        if (searchLoading) {
-          return (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400">
-              <div className="w-8 h-8 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
-              <span className="text-sm">Searching with AI…</span>
-            </div>
-          );
-        }
-
-        const metaBadges: string[] = [];
-        if (searchMeta?.personName) metaBadges.push(`👤 ${searchMeta.personName}`);
-        if (searchMeta?.dateRange) {
-          const { start, end } = searchMeta.dateRange;
-          metaBadges.push(`📅 ${start.slice(0, 7)} – ${end.slice(0, 7)}`);
-        }
-
         return (
-          <div>
-            <div className="flex items-center gap-3 mb-3 flex-wrap">
-              <span className="text-sm text-gray-500">
-                {searchResults.length}{searchHasMore ? "+" : ""} result{searchResults.length !== 1 ? "s" : ""}
-              </span>
-              {metaBadges.map((b) => (
-                <span key={b} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2.5 py-0.5">
-                  {b}
-                </span>
-              ))}
-              {searchResults.length === 0 && (
-                <span className="text-sm text-gray-400">No photos found — try different words</span>
-              )}
-            </div>
-            <PhotoMasonry
-              photos={searchResults}
-              onPhotoClick={(p) => openPhoto(p)}
-            />
-            {/* Infinite scroll sentinel for search */}
-            <div ref={searchSentinelRef} className="h-10" />
-            {searchLoadingMore && (
-              <div className="flex justify-center py-4">
-                <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
-              </div>
-            )}
-          </div>
+          <SearchView
+            query={searchQuery}
+            meta={searchMeta}
+            results={searchResults}
+            loading={searchLoading}
+            loadingMore={searchLoadingMore}
+            hasMore={searchHasMore}
+            sentinelRef={searchSentinelRef}
+            onPhotoClick={(p) => openPhoto(p)}
+            onRemoveTerm={removeTerm}
+          />
         );
       }
 
