@@ -9,6 +9,9 @@ import {
   fetchFilterOptions,
   bulkAction,
   fetchMe,
+  fetchPeopleSuggestions,
+  confirmPeopleSuggestion,
+  mergePeople,
   Photo,
   Album,
   Person,
@@ -17,6 +20,7 @@ import {
   FilterOptions,
   EMPTY_FILTERS,
   hasActiveFilters,
+  PeopleSuggestion,
 } from "./api";
 import { useInfinitePhotos } from "./hooks/useInfinitePhotos";
 import { useIntersectionSentinel } from "./hooks/useIntersectionSentinel";
@@ -46,6 +50,9 @@ import { BulkActionBar } from "./components/BulkActionBar";
 import AdminView from "./components/AdminView";
 import FilterDrawer from "./components/FilterDrawer";
 import PhotoEditor from "./components/PhotoEditor";
+import { MergeSuggestionBar } from "./components/MergeSuggestionBar";
+import { MergeReviewModal } from "./components/MergeReviewModal";
+import { MergePeopleModal } from "./components/MergePeopleModal";
 import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
 
@@ -85,6 +92,13 @@ export default function App() {
   const [personPhotosLoading, setPersonPhotosLoading] = useState(false);
   const [activePerson, setActivePerson] = useState<Person | null>(null);
   const [selectedPhotoForTagging, setSelectedPhotoForTagging] = useState<Photo | null>(null);
+
+  // Face suggestions & merge state
+  const [suggestions, setSuggestions] = useState<PeopleSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [dismissedPersonIds, setDismissedPersonIds] = useState<Set<number>>(new Set());
+  const [reviewSuggestion, setReviewSuggestion] = useState<PeopleSuggestion | null>(null);
+  const [showMergeModal, setShowMergeModal] = useState(false);
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
   const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
@@ -154,31 +168,73 @@ export default function App() {
     fetchFilterOptions().then(setFilterOptions).catch(() => {});
   }, [user, isApproved]);
 
-  // Load "People" when view is people
+  // Load "People" when view is people, then load suggestions
   useEffect(() => {
     if (view !== "people") return;
 
     let cancelled = false;
     setPeopleLoading(true);
+    setSuggestions([]);
+    setSuggestionsLoading(true);
+    setDismissedPersonIds(new Set());
 
     fetchPeople()
       .then((data) => {
         if (cancelled) return;
         setPeople(Array.isArray(data) ? data : []);
       })
-      .catch(() => {
-        if (cancelled) return;
-        setPeople([]);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setPeopleLoading(false);
-      });
+      .catch(() => { if (!cancelled) setPeople([]); })
+      .finally(() => { if (!cancelled) setPeopleLoading(false); });
 
-    return () => {
-      cancelled = true;
-    };
+    fetchPeopleSuggestions()
+      .then((data) => { if (!cancelled) setSuggestions(data); })
+      .catch(() => { if (!cancelled) setSuggestions([]); })
+      .finally(() => { if (!cancelled) setSuggestionsLoading(false); });
+
+    return () => { cancelled = true; };
   }, [view]);
+
+  const handleConfirmSuggestion = useCallback(async (suggestion: PeopleSuggestion) => {
+    const photoIds = suggestion.matches.map((m) => m.photoId);
+    await confirmPeopleSuggestion(suggestion.person.id, photoIds);
+    setSuggestions((prev) => prev.filter((s) => s.person.id !== suggestion.person.id));
+    setPeople((prev) =>
+      prev.map((p) =>
+        p.id === suggestion.person.id
+          ? { ...p, photoCount: p.photoCount + photoIds.length }
+          : p
+      )
+    );
+  }, []);
+
+  const handleConfirmSelectedSuggestion = useCallback(async (personId: number, photoIds: number[]) => {
+    await confirmPeopleSuggestion(personId, photoIds);
+    setSuggestions((prev) =>
+      prev.map((s) =>
+        s.person.id !== personId
+          ? s
+          : {
+              ...s,
+              matches: s.matches.filter((m) => !photoIds.includes(m.photoId)),
+              totalCount: s.totalCount - photoIds.length,
+            }
+      ).filter((s) => s.totalCount > 0)
+    );
+    setPeople((prev) =>
+      prev.map((p) =>
+        p.id === personId ? { ...p, photoCount: p.photoCount + photoIds.length } : p
+      )
+    );
+    setReviewSuggestion(null);
+  }, []);
+
+  const handleMergePeople = useCallback(async (sourceId: number, targetId: number) => {
+    await mergePeople(sourceId, targetId);
+    // Reload people list
+    const data = await fetchPeople();
+    setPeople(Array.isArray(data) ? data : []);
+    setShowMergeModal(false);
+  }, []);
 
   // 🔍 Stable "load more" — uses refs so the callback never changes identity
   const loadMoreSearch = useCallback(async () => {
@@ -504,11 +560,21 @@ export default function App() {
     }
 
     if (view === "people") {
-      return <div className="text-xl font-semibold mb-4">People</div>;
+      return (
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-xl font-semibold">People</div>
+          <button
+            onClick={() => setShowMergeModal(true)}
+            className="px-3 py-1.5 text-xs rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            Merge Duplicates
+          </button>
+        </div>
+      );
     }
 
     return null;
-  }, [view, activePerson, searchInput, submitSearch, showFilters, filters, filterOptions, selectMode, selectedIds]);
+  }, [view, activePerson, searchInput, submitSearch, showFilters, filters, filterOptions, selectMode, selectedIds, setShowMergeModal]);
 
   const renderView = () => {
     if (view === "photos") {
@@ -642,13 +708,23 @@ export default function App() {
     }
 
     if (view === "people") {
+      const visibleSuggestions = suggestions.filter((s) => !dismissedPersonIds.has(s.person.id));
       return (
-        <PeopleGrid
-          people={people}
-          onPersonClick={loadPerson}
-          onUnidentifiedClick={() => setView("unidentified")}
-          loading={peopleLoading}
-        />
+        <>
+          <MergeSuggestionBar
+            suggestions={visibleSuggestions}
+            loading={suggestionsLoading}
+            onConfirmAll={handleConfirmSuggestion}
+            onReview={(s) => setReviewSuggestion(s)}
+            onDismiss={(personId) => setDismissedPersonIds((prev) => new Set([...prev, personId]))}
+          />
+          <PeopleGrid
+            people={people}
+            onPersonClick={loadPerson}
+            onUnidentifiedClick={() => setView("unidentified")}
+            loading={peopleLoading}
+          />
+        </>
       );
     }
 
@@ -873,6 +949,24 @@ export default function App() {
           alert(`Added to "${albumName}"`);
         }}
       />
+
+      {/* Face merge review modal */}
+      {reviewSuggestion && (
+        <MergeReviewModal
+          suggestion={reviewSuggestion}
+          onConfirm={(photoIds) => handleConfirmSelectedSuggestion(reviewSuggestion.person.id, photoIds)}
+          onCancel={() => setReviewSuggestion(null)}
+        />
+      )}
+
+      {/* Merge people modal */}
+      {showMergeModal && (
+        <MergePeopleModal
+          people={people}
+          onMerge={handleMergePeople}
+          onCancel={() => setShowMergeModal(false)}
+        />
+      )}
 
       {/* Memory slideshow overlay */}
       {slideshowMemory && (

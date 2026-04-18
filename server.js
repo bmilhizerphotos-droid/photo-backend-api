@@ -6,6 +6,7 @@ import cors from "cors";
 import sharp from "sharp";
 import heicConvert from "heic-convert";
 import { Worker } from "worker_threads";
+import { exec } from "child_process";
 import { dbGet, dbAll, dbRun } from "./db.js";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
@@ -1433,6 +1434,180 @@ app.get("/api/people/unidentified/photos", authenticateToken, async (req, res) =
   } catch (err) {
     console.error("Failed to load unidentified photos:", err);
     res.status(500).json({ error: "Failed to load unidentified photos" });
+  }
+});
+
+// ── Face similarity helpers ──────────────────────────────────────────────────
+function cosineSim(a, b) {
+  let dot = 0, ma = 0, mb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(ma) * Math.sqrt(mb) + 1e-8);
+}
+
+function blobToF32(blob) {
+  const buf = Buffer.isBuffer(blob) ? blob : Buffer.from(blob);
+  return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+}
+
+function computeCentroid(embeddings) {
+  if (!embeddings.length) return null;
+  const dim = embeddings[0].length;
+  const avg = new Float32Array(dim);
+  for (const e of embeddings) for (let i = 0; i < dim; i++) avg[i] += e[i];
+  for (let i = 0; i < dim; i++) avg[i] /= embeddings.length;
+  return avg;
+}
+
+// Best-effort ExifTool write-back (no-op if exiftool not installed)
+function writePersonMetadata(filePath, personName) {
+  return new Promise((resolve) => {
+    exec(`exiftool -Keywords+="${personName}" -overwrite_original "${filePath}"`, (err) => {
+      if (err) console.log("[exiftool] skipped:", err.message?.split("\n")[0]);
+      resolve();
+    });
+  });
+}
+
+// GET /api/people/suggestions — cosine-similarity face suggestions
+app.get("/api/people/suggestions", authenticateToken, async (req, res) => {
+  try {
+    const THRESHOLD = 0.45;
+    const MAX_SAMPLES = 100;  // embeddings sampled per person for centroid
+    const MAX_UNID = 2000;    // unidentified photos to compare
+
+    const people = await dbAll(`SELECT id, name, photo_count FROM people`);
+    if (!people.length) return res.json({ suggestions: [] });
+
+    // Build centroid per person from their tagged photos' face embeddings
+    const centroids = [];
+    for (const person of people) {
+      const rows = await dbAll(`
+        SELECT fe.embedding FROM face_embeddings fe
+        WHERE fe.photo_id IN (SELECT photo_id FROM photo_people WHERE person_id = ?)
+        ORDER BY RANDOM() LIMIT ?
+      `, [person.id, MAX_SAMPLES]);
+      if (!rows.length) continue;
+      const centroid = computeCentroid(rows.map(r => blobToF32(r.embedding)));
+      if (centroid) centroids.push({ person, centroid });
+    }
+
+    if (!centroids.length) return res.json({ suggestions: [] });
+
+    // One best face embedding per unidentified photo (highest confidence)
+    const unidRows = await dbAll(`
+      SELECT fe.photo_id, fe.embedding, fe.confidence
+      FROM face_embeddings fe
+      WHERE fe.photo_id NOT IN (SELECT DISTINCT photo_id FROM photo_people)
+      GROUP BY fe.photo_id
+      HAVING fe.confidence = MAX(fe.confidence)
+      ORDER BY fe.confidence DESC
+      LIMIT ?
+    `, [MAX_UNID]);
+
+    const protocol = req.get("x-forwarded-proto") || req.protocol;
+    const host = req.get("x-forwarded-host") || req.get("host");
+    const base = `${protocol}://${host}`;
+
+    // Compare each unidentified face against person centroids
+    const personMatches = new Map(); // personId → [{photoId, confidence}]
+    for (const row of unidRows) {
+      const emb = blobToF32(row.embedding);
+      let bestSim = THRESHOLD, bestPerson = null;
+      for (const { person, centroid } of centroids) {
+        const sim = cosineSim(emb, centroid);
+        if (sim > bestSim) { bestSim = sim; bestPerson = person; }
+      }
+      if (!bestPerson) continue;
+      if (!personMatches.has(bestPerson.id)) personMatches.set(bestPerson.id, []);
+      personMatches.get(bestPerson.id).push({ photoId: row.photo_id, confidence: +bestSim.toFixed(3) });
+    }
+
+    const suggestions = [];
+    for (const [personId, matches] of personMatches) {
+      const person = people.find(p => p.id === personId);
+      if (!person) continue;
+      const sorted = [...matches].sort((a, b) => b.confidence - a.confidence);
+      suggestions.push({
+        person: { id: person.id, name: person.name, photoCount: person.photo_count },
+        matches: sorted.slice(0, 20).map(m => ({
+          photoId: m.photoId, confidence: m.confidence,
+          thumbnailUrl: `${base}/thumbnails/${m.photoId}`,
+        })),
+        totalCount: sorted.length,
+      });
+    }
+
+    suggestions.sort((a, b) => b.totalCount - a.totalCount);
+    res.json({ suggestions });
+  } catch (err) {
+    console.error("GET /api/people/suggestions error:", err);
+    res.status(500).json({ error: "Failed to compute suggestions" });
+  }
+});
+
+// POST /api/people/suggestions/confirm — tag photos as a named person
+app.post("/api/people/suggestions/confirm", authenticateToken, async (req, res) => {
+  const { personId, photoIds } = req.body;
+  if (!personId || !Array.isArray(photoIds) || !photoIds.length)
+    return res.status(400).json({ error: "Invalid personId or photoIds" });
+  try {
+    const person = await dbGet("SELECT id, name FROM people WHERE id = ?", [personId]);
+    if (!person) return res.status(404).json({ error: "Person not found" });
+
+    for (const photoId of photoIds) {
+      await dbRun("INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)", [photoId, personId]);
+    }
+    const countRow = await dbGet("SELECT COUNT(*) as c FROM photo_people WHERE person_id = ?", [personId]);
+    await dbRun("UPDATE people SET photo_count = ? WHERE id = ?", [countRow.c, personId]);
+
+    // Best-effort metadata write-back
+    const phs = photoIds.map(() => "?").join(",");
+    const photos = await dbAll(`SELECT full_path FROM photos WHERE id IN (${phs})`, photoIds);
+    for (const photo of photos) {
+      if (photo.full_path) writePersonMetadata(photo.full_path, person.name).catch(() => {});
+    }
+
+    res.json({ success: true, tagged: photoIds.length });
+  } catch (err) {
+    console.error("POST /api/people/suggestions/confirm error:", err);
+    res.status(500).json({ error: "Failed to confirm suggestion" });
+  }
+});
+
+// POST /api/people/merge — merge Person A into Person B
+app.post("/api/people/merge", authenticateToken, async (req, res) => {
+  const { sourceId, targetId } = req.body;
+  if (!sourceId || !targetId || sourceId === targetId)
+    return res.status(400).json({ error: "Invalid sourceId/targetId" });
+  try {
+    const [source, target] = await Promise.all([
+      dbGet("SELECT id, name FROM people WHERE id = ?", [sourceId]),
+      dbGet("SELECT id, name FROM people WHERE id = ?", [targetId]),
+    ]);
+    if (!source || !target) return res.status(404).json({ error: "Person not found" });
+
+    // Move photo tags (skip photos already tagged to target)
+    await dbRun(`
+      INSERT OR IGNORE INTO photo_people (photo_id, person_id)
+      SELECT photo_id, ? FROM photo_people WHERE person_id = ?
+        AND photo_id NOT IN (SELECT photo_id FROM photo_people WHERE person_id = ?)
+    `, [targetId, sourceId, targetId]);
+    await dbRun("DELETE FROM photo_people WHERE person_id = ?", [sourceId]);
+
+    // Move face embeddings
+    await dbRun("UPDATE face_embeddings SET person_id = ? WHERE person_id = ?", [targetId, sourceId]);
+
+    // Recount and delete source
+    const countRow = await dbGet("SELECT COUNT(*) as c FROM photo_people WHERE person_id = ?", [targetId]);
+    await dbRun("UPDATE people SET photo_count = ? WHERE id = ?", [countRow.c, targetId]);
+    await dbRun("DELETE FROM people WHERE id = ?", [sourceId]);
+
+    res.json({ success: true, mergedInto: { id: target.id, name: target.name } });
+  } catch (err) {
+    console.error("POST /api/people/merge error:", err);
+    res.status(500).json({ error: "Failed to merge people" });
   }
 });
 

@@ -1203,6 +1203,44 @@ export async function editSave(params: EditSaveParams): Promise<void> {
   if (!res.ok) throw new Error(await res.text());
 }
 
+// ── People Suggestions & Merge ──────────────────
+
+export interface PeopleSuggestionMatch {
+  photoId: number;
+  confidence: number;
+  thumbnailUrl: string;
+}
+
+export interface PeopleSuggestion {
+  person: { id: number; name: string; photoCount: number };
+  matches: PeopleSuggestionMatch[];
+  totalCount: number;
+}
+
+export async function fetchPeopleSuggestions(): Promise<PeopleSuggestion[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/people/suggestions`, {}, 60000);
+  if (!res.ok) throw new Error("Failed to fetch suggestions");
+  const data = await res.json();
+  return data.suggestions as PeopleSuggestion[];
+}
+
+export async function confirmPeopleSuggestion(personId: number, photoIds: number[]): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/api/people/suggestions/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ personId, photoIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function mergePeople(sourceId: number, targetId: number): Promise<{ mergedInto: { id: number; name: string } }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/people/merge`, {
+    method: "POST",
+    body: JSON.stringify({ sourceId, targetId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Bulk Download ZIP ────────────────────────────
 export async function downloadPhotosAsZip(photoIds: number[]): Promise<void> {
   const url = API_BASE ? `${API_BASE}/api/photos/download-zip` : `/api/photos/download-zip`;
