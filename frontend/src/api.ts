@@ -1274,6 +1274,67 @@ export async function confirmPeopleSuggestion(personId: number, photoIds: number
   if (!res.ok) throw new Error(await res.text());
 }
 
+// ── Unidentified Face Clustering ─────────────────────
+export interface FaceClusterMatch {
+  faceId: number;
+  photoId: number;
+  confidence: number;
+  thumbnailUrl: string;
+  faceBbox: { x: number; y: number; width: number; height: number };
+}
+
+export interface FaceCluster {
+  clusterId: number;
+  size: number;
+  matches: FaceClusterMatch[];
+}
+
+export async function fetchFaceClusters(
+  page = 0,
+  limit = 10,
+  refresh = false
+): Promise<{ clusters: FaceCluster[]; totalClusters: number; page: number }> {
+  const token = await getAuthToken();
+  const url = `${API_BASE}/api/faces/clusters?page=${page}&limit=${limit}${refresh ? "&refresh=1" : ""}`;
+  const res = await fetchWithAuth(url, {}, 120000);
+  if (!res.ok) throw new Error("Failed to fetch clusters");
+  const data = await res.json();
+  return {
+    ...data,
+    clusters: (data.clusters as any[]).map((c) => ({
+      ...c,
+      matches: (c.matches as any[]).map((m) => ({
+        ...m,
+        thumbnailUrl: appendToken(
+          API_BASE ? `${API_BASE}${m.thumbnailUrl}` : m.thumbnailUrl,
+          token
+        ) ?? m.thumbnailUrl,
+      })),
+    })),
+  };
+}
+
+export async function confirmFaceCluster(
+  name: string,
+  faceIds: number[],
+  photoIds: number[]
+): Promise<{ person: { id: number; name: string } }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/faces/clusters/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ name, faceIds, photoIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function rejectFaceCluster(faceIds: number[]): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/api/faces/clusters/reject`, {
+    method: "POST",
+    body: JSON.stringify({ faceIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export async function rejectPeopleSuggestion(personId: number, faceIds: number[]): Promise<void> {
   const res = await fetchWithAuth(`${API_BASE}/api/people/suggestions/reject`, {
     method: "POST",

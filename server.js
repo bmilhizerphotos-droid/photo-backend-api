@@ -153,6 +153,9 @@ async function runMigrations() {
     face_id   INTEGER NOT NULL,
     PRIMARY KEY (person_id, face_id)
   )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS unidentified_face_skips (
+    face_id INTEGER PRIMARY KEY
+  )`);
 }
 
 // ---------------- AUTHENTICATION MIDDLEWARE ----------------
@@ -1464,6 +1467,60 @@ function computeCentroid(embeddings) {
   return avg;
 }
 
+// ── Unidentified face cluster cache ──────────────────────────────────────────
+let _clusterCache = null;
+let _clusterCacheTime = 0;
+const CLUSTER_CACHE_TTL = 20 * 60 * 1000; // 20 min
+
+async function computeUnidentifiedClusters() {
+  const THRESHOLD = 0.90;
+  const MAX_FACES = 3000;
+
+  const allRows = await dbAll(`
+    SELECT fe.id as face_id, fe.photo_id, fe.confidence,
+           fe.bbox_x, fe.bbox_y, fe.bbox_width, fe.bbox_height, fe.embedding
+    FROM face_embeddings fe
+    WHERE fe.person_id IS NULL
+      AND fe.photo_id NOT IN (SELECT DISTINCT photo_id FROM photo_people)
+      AND fe.id NOT IN (SELECT face_id FROM unidentified_face_skips)
+    ORDER BY fe.confidence DESC
+    LIMIT ?
+  `, [MAX_FACES * 4]);
+
+  // One best face per photo (already sorted by confidence desc)
+  const seenPhotos = new Set();
+  const faces = [];
+  for (const row of allRows) {
+    if (!seenPhotos.has(row.photo_id)) {
+      seenPhotos.add(row.photo_id);
+      faces.push({ ...row, emb: blobToF32(row.embedding) });
+      if (faces.length >= MAX_FACES) break;
+    }
+  }
+
+  // Greedy single-pass clustering
+  const clusters = [];
+  for (const face of faces) {
+    let bestIdx = -1, bestSim = THRESHOLD;
+    for (let i = 0; i < clusters.length; i++) {
+      const sim = cosineSim(face.emb, clusters[i].centroid);
+      if (sim > bestSim) { bestSim = sim; bestIdx = i; }
+    }
+    if (bestIdx >= 0) {
+      const c = clusters[bestIdx];
+      c.faces.push({ ...face, confidence: +bestSim.toFixed(3) });
+      const n = c.faces.length;
+      for (let i = 0; i < c.centroid.length; i++) {
+        c.centroid[i] = (c.centroid[i] * (n - 1) + face.emb[i]) / n;
+      }
+    } else {
+      clusters.push({ centroid: Float32Array.from(face.emb), faces: [{ ...face, confidence: 1.0 }] });
+    }
+  }
+
+  return clusters.filter(c => c.faces.length >= 2).sort((a, b) => b.faces.length - a.faces.length);
+}
+
 // Best-effort ExifTool write-back (no-op if exiftool not installed)
 function writePersonMetadata(filePath, personName) {
   return new Promise((resolve) => {
@@ -1612,6 +1669,94 @@ app.post("/api/people/suggestions/reject", authenticateToken, async (req, res) =
   } catch (err) {
     console.error("POST /api/people/suggestions/reject error:", err);
     res.status(500).json({ error: "Failed to reject suggestions" });
+  }
+});
+
+// GET /api/faces/clusters — paginated unidentified face clusters
+app.get("/api/faces/clusters", authenticateToken, async (req, res) => {
+  try {
+    const page = Math.max(0, Number(req.query.page || 0));
+    const limit = Math.max(1, Math.min(20, Number(req.query.limit || 10)));
+    const refresh = req.query.refresh === "1";
+
+    if (!_clusterCache || refresh || Date.now() - _clusterCacheTime > CLUSTER_CACHE_TTL) {
+      console.log("[clusters] Computing unidentified face clusters…");
+      _clusterCache = await computeUnidentifiedClusters();
+      _clusterCacheTime = Date.now();
+      console.log(`[clusters] Done — ${_clusterCache.length} clusters from face_embeddings`);
+    }
+
+    const total = _clusterCache.length;
+    const slice = _clusterCache.slice(page * limit, (page + 1) * limit);
+    res.json({
+      clusters: slice.map((c, idx) => ({
+        clusterId: page * limit + idx,
+        size: c.faces.length,
+        matches: c.faces.slice(0, 20).map(f => ({
+          faceId: f.face_id, photoId: f.photo_id, confidence: f.confidence,
+          faceBbox: { x: f.bbox_x, y: f.bbox_y, width: f.bbox_width, height: f.bbox_height },
+          thumbnailUrl: `/thumbnails/${f.photo_id}`,
+        })),
+      })),
+      totalClusters: total,
+      page,
+      limit,
+    });
+  } catch (err) {
+    console.error("GET /api/faces/clusters error:", err);
+    res.status(500).json({ error: "Failed to compute clusters" });
+  }
+});
+
+// POST /api/faces/clusters/confirm — name a cluster, tag all photos, write XMP
+app.post("/api/faces/clusters/confirm", authenticateToken, async (req, res) => {
+  const { name, faceIds, photoIds } = req.body;
+  if (!name?.trim() || !Array.isArray(faceIds) || !faceIds.length || !Array.isArray(photoIds) || !photoIds.length)
+    return res.status(400).json({ error: "name, faceIds and photoIds are required" });
+  try {
+    const trimmedName = name.trim();
+    let person = await dbGet("SELECT id, name FROM people WHERE name = ? COLLATE NOCASE", [trimmedName]);
+    if (!person) {
+      const r = await dbRun("INSERT INTO people (name, photo_count) VALUES (?, 0)", [trimmedName]);
+      person = { id: r.lastID, name: trimmedName };
+    }
+    for (const photoId of photoIds) {
+      await dbRun("INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)", [photoId, person.id]);
+    }
+    for (const faceId of faceIds) {
+      await dbRun("UPDATE face_embeddings SET person_id = ? WHERE id = ?", [person.id, faceId]);
+    }
+    const countRow = await dbGet("SELECT COUNT(*) as c FROM photo_people WHERE person_id = ?", [person.id]);
+    await dbRun("UPDATE people SET photo_count = ? WHERE id = ?", [countRow.c, person.id]);
+
+    const phs = photoIds.map(() => "?").join(",");
+    const photos = await dbAll(`SELECT full_path FROM photos WHERE id IN (${phs})`, photoIds);
+    for (const photo of photos) {
+      if (photo.full_path) writeExifPersonName(photo.full_path, person.name).catch(() => {});
+    }
+
+    _clusterCache = null; // invalidate
+    res.json({ success: true, person: { id: person.id, name: person.name }, tagged: photoIds.length });
+  } catch (err) {
+    console.error("POST /api/faces/clusters/confirm error:", err);
+    res.status(500).json({ error: "Failed to confirm cluster" });
+  }
+});
+
+// POST /api/faces/clusters/reject — permanently skip these faces from clustering
+app.post("/api/faces/clusters/reject", authenticateToken, async (req, res) => {
+  const { faceIds } = req.body;
+  if (!Array.isArray(faceIds) || !faceIds.length)
+    return res.status(400).json({ error: "faceIds required" });
+  try {
+    for (const faceId of faceIds) {
+      await dbRun("INSERT OR IGNORE INTO unidentified_face_skips (face_id) VALUES (?)", [faceId]);
+    }
+    _clusterCache = null;
+    res.json({ success: true, skipped: faceIds.length });
+  } catch (err) {
+    console.error("POST /api/faces/clusters/reject error:", err);
+    res.status(500).json({ error: "Failed to reject cluster" });
   }
 });
 
