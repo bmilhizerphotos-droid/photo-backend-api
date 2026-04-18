@@ -1738,8 +1738,10 @@ app.post("/api/faces/clusters/confirm", authenticateToken, async (req, res) => {
 
     const phs = photoIds.map(() => "?").join(",");
     const photos = await dbAll(`SELECT full_path FROM photos WHERE id IN (${phs})`, photoIds);
-    for (const photo of photos) {
-      if (photo.full_path) writeExifPersonName(photo.full_path, person.name).catch(() => {});
+    const withPath = photos.filter(p => p.full_path);
+    console.log(`[confirm-cluster] Writing XMP for ${withPath.length}/${photos.length} photos as "${person.name}"`);
+    for (const photo of withPath) {
+      writeExifPersonName(photo.full_path, person.name).catch(() => {});
     }
 
     _clusterCache = null; // invalidate
