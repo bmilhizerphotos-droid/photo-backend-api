@@ -273,14 +273,18 @@ export async function removePhotosFromAlbum(albumId: number, photoIds: number[])
 export async function fetchPeople(): Promise<Person[]> {
   const url = API_BASE ? `${API_BASE}/api/people` : `/api/people`;
   try {
+    // Fetch token once before the call so the same token signs both the
+    // API request and the thumbnail URLs (avoids a second async round-trip)
+    const token = await getAuthToken();
     const res = await fetchWithAuth(url);
     if (!res.ok) {
       throw new Error(`Failed to fetch people: ${res.status} ${res.statusText}`);
     }
     const data = await res.json();
-    const token = await getAuthToken();
     return (Array.isArray(data) ? data : []).map((p: any) => ({
       ...p,
+      // Server now returns relative paths (/thumbnails/:id); appendToken builds
+      // the full authenticated URL using API_BASE + token query param
       thumbnailUrl: appendToken(p.thumbnailUrl, token)
     }));
   } catch (error: any) {
@@ -459,12 +463,12 @@ export async function fetchPhotoTaggedPeople(photoId: number): Promise<Person[]>
     : `/api/photos/${photoId}/people`;
 
   try {
+    const token = await getAuthToken();
     const res = await fetchWithAuth(url);
     if (!res.ok) {
       throw new Error(`Failed to fetch tagged people: ${res.status} ${res.statusText}`);
     }
     const data = await res.json();
-    const token = await getAuthToken();
     return (Array.isArray(data) ? data : []).map((p: any) => ({
       ...p,
       thumbnailUrl: appendToken(p.thumbnailUrl, token)
@@ -1245,7 +1249,19 @@ export async function fetchPeopleSuggestions(): Promise<PeopleSuggestion[]> {
   const res = await fetchWithAuth(`${API_BASE}/api/people/suggestions`, {}, 60000);
   if (!res.ok) throw new Error("Failed to fetch suggestions");
   const data = await res.json();
-  return data.suggestions as PeopleSuggestion[];
+  const token = await getAuthToken();
+  return (data.suggestions as any[]).map((s) => ({
+    ...s,
+    matches: (s.matches as any[]).map((m) => ({
+      ...m,
+      // Server returns relative paths (/thumbnails/:id); withApiBase + token
+      // makes them fully-qualified authenticated URLs for <img> tags
+      thumbnailUrl: appendToken(
+        API_BASE ? `${API_BASE}${m.thumbnailUrl}` : m.thumbnailUrl,
+        token
+      ) ?? m.thumbnailUrl,
+    })),
+  })) as PeopleSuggestion[];
 }
 
 export async function confirmPeopleSuggestion(personId: number, photoIds: number[]): Promise<void> {

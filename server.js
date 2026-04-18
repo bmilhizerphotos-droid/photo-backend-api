@@ -1359,13 +1359,12 @@ app.get("/api/people", authenticateToken, async (req, res) => {
   try {
     const tableCheck = await dbGet("SELECT name FROM sqlite_master WHERE type='table' AND name='people'");
     if (!tableCheck) return res.json([]);
-    const protocol = req.get("x-forwarded-proto") || req.protocol;
-    const host = req.get("x-forwarded-host") || req.get("host");
-    const base = `${protocol}://${host}`;
     const rows = await dbAll(`SELECT id, name, thumbnail_photo_id, photo_count FROM people ORDER BY photo_count DESC`);
+    // Return relative paths — frontend's withApiBase + appendToken adds the correct
+    // API base URL and auth token, eliminating any x-forwarded-host dependency
     res.json((rows || []).map((p) => ({
       id: p.id, name: p.name, photoCount: p.photo_count,
-      thumbnailUrl: p.thumbnail_photo_id ? `${base}/thumbnails/${p.thumbnail_photo_id}` : null,
+      thumbnailUrl: p.thumbnail_photo_id ? `/thumbnails/${p.thumbnail_photo_id}` : null,
     })));
   } catch (err) {
     res.status(500).json({ error: "Failed to load people" });
@@ -1506,10 +1505,6 @@ app.get("/api/people/suggestions", authenticateToken, async (req, res) => {
       LIMIT ?
     `, [MAX_UNID]);
 
-    const protocol = req.get("x-forwarded-proto") || req.protocol;
-    const host = req.get("x-forwarded-host") || req.get("host");
-    const base = `${protocol}://${host}`;
-
     // Compare each unidentified face against person centroids
     const personMatches = new Map(); // personId → [{photoId, confidence}]
     for (const row of unidRows) {
@@ -1533,7 +1528,7 @@ app.get("/api/people/suggestions", authenticateToken, async (req, res) => {
         person: { id: person.id, name: person.name, photoCount: person.photo_count },
         matches: sorted.slice(0, 20).map(m => ({
           photoId: m.photoId, confidence: m.confidence,
-          thumbnailUrl: `${base}/thumbnails/${m.photoId}`,
+          thumbnailUrl: `/thumbnails/${m.photoId}`,
         })),
         totalCount: sorted.length,
       });
@@ -2283,15 +2278,13 @@ app.post("/api/faces/:faceId/create-person", authenticateToken, async (req, res)
     const photo = await dbGet("SELECT full_path FROM photos WHERE id = ?", [face.photo_id]);
     if (photo?.full_path) writeExifPersonName(photo.full_path, name).catch(() => {});
 
-    const protocol = req.get("x-forwarded-proto") || req.protocol;
-    const host = req.get("x-forwarded-host") || req.get("host");
     res.json({
       success: true,
       person: {
         id: newPerson.id,
         name: newPerson.name,
         photoCount: 1,
-        thumbnailUrl: `${protocol}://${host}/thumbnails/${face.photo_id}`,
+        thumbnailUrl: `/thumbnails/${face.photo_id}`,
       },
     });
   } catch (err) {
@@ -2322,13 +2315,7 @@ app.post("/api/people/create", authenticateToken, async (req, res) => {
 app.get("/api/photos/:id/people", authenticateToken, async (req, res) => {
   try {
     const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
-    }
-
-    const protocol = req.get("x-forwarded-proto") || req.protocol;
-    const host = req.get("x-forwarded-host") || req.get("host");
-    const base = `${protocol}://${host}`;
+    if (photoId === null) return res.status(400).json({ error: "Invalid photo ID" });
 
     const rows = await dbAll(
       `SELECT p.id, p.name, p.photo_count, p.thumbnail_photo_id
@@ -2339,14 +2326,12 @@ app.get("/api/photos/:id/people", authenticateToken, async (req, res) => {
       [photoId]
     );
 
-    res.json(
-      (rows || []).map((person) => ({
-        id: person.id,
-        name: person.name,
-        photoCount: person.photo_count || 0,
-        thumbnailUrl: person.thumbnail_photo_id ? `${base}/thumbnails/${person.thumbnail_photo_id}` : null,
-      }))
-    );
+    res.json((rows || []).map((person) => ({
+      id: person.id,
+      name: person.name,
+      photoCount: person.photo_count || 0,
+      thumbnailUrl: person.thumbnail_photo_id ? `/thumbnails/${person.thumbnail_photo_id}` : null,
+    })));
   } catch (err) {
     console.error("Failed to load photo people:", err);
     res.status(500).json({ error: "Failed to load photo people" });
