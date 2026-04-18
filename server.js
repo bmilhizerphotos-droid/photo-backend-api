@@ -1709,16 +1709,23 @@ app.get("/api/faces/clusters", authenticateToken, async (req, res) => {
 });
 
 // POST /api/faces/clusters/confirm — name a cluster, tag all photos, write XMP
+// Accepts { personId } (existing) OR { name } (create new), plus faceIds + photoIds
 app.post("/api/faces/clusters/confirm", authenticateToken, async (req, res) => {
-  const { name, faceIds, photoIds } = req.body;
-  if (!name?.trim() || !Array.isArray(faceIds) || !faceIds.length || !Array.isArray(photoIds) || !photoIds.length)
-    return res.status(400).json({ error: "name, faceIds and photoIds are required" });
+  const { name, personId, faceIds, photoIds } = req.body;
+  if ((!name?.trim() && !personId) || !Array.isArray(faceIds) || !faceIds.length || !Array.isArray(photoIds) || !photoIds.length)
+    return res.status(400).json({ error: "personId or name, plus faceIds and photoIds are required" });
   try {
-    const trimmedName = name.trim();
-    let person = await dbGet("SELECT id, name FROM people WHERE name = ? COLLATE NOCASE", [trimmedName]);
-    if (!person) {
-      const r = await dbRun("INSERT INTO people (name, photo_count) VALUES (?, 0)", [trimmedName]);
-      person = { id: r.lastID, name: trimmedName };
+    let person;
+    if (personId) {
+      person = await dbGet("SELECT id, name FROM people WHERE id = ?", [personId]);
+      if (!person) return res.status(404).json({ error: "Person not found" });
+    } else {
+      const trimmedName = name.trim();
+      person = await dbGet("SELECT id, name FROM people WHERE name = ? COLLATE NOCASE", [trimmedName]);
+      if (!person) {
+        const r = await dbRun("INSERT INTO people (name, photo_count) VALUES (?, 0)", [trimmedName]);
+        person = { id: r.lastID, name: trimmedName };
+      }
     }
     for (const photoId of photoIds) {
       await dbRun("INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)", [photoId, person.id]);

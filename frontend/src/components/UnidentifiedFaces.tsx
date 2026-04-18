@@ -2,9 +2,13 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   FaceCluster,
   FaceClusterMatch,
+  ClusterConfirmTarget,
   fetchFaceClusters,
   confirmFaceCluster,
   rejectFaceCluster,
+  fetchPeople,
+  searchPeople,
+  Person,
 } from "../api";
 import { FaceExpandModal } from "./FaceExpandModal";
 
@@ -12,15 +16,215 @@ interface UnidentifiedFacesProps {
   onBack: () => void;
 }
 
-// ── Inline cluster review modal ───────────────────────────────────────────────
+// ── Person selection state ────────────────────────────────────────────────────
+type PersonSelection =
+  | { type: "existing"; person: Person }
+  | { type: "new"; name: string }
+  | null;
+
+function selectionToTarget(s: PersonSelection): ClusterConfirmTarget | null {
+  if (!s) return null;
+  return s.type === "existing" ? { personId: s.person.id } : { name: s.name };
+}
+
+// ── Inline searchable combo-box ───────────────────────────────────────────────
+function PersonComboBox({
+  value,
+  onChange,
+}: {
+  value: PersonSelection;
+  onChange: (v: PersonSelection) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Person[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout>>();
+
+  // Close on click outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Debounced search
+  useEffect(() => {
+    clearTimeout(debounce.current);
+    debounce.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const data = query.trim() ? await searchPeople(query) : await fetchPeople();
+        setResults(data.slice(0, 8));
+      } catch {
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(debounce.current);
+  }, [query]);
+
+  const trimmed = query.trim();
+  const exactMatch = results.some((p) => p.name.toLowerCase() === trimmed.toLowerCase());
+  const showAdd = trimmed.length >= 2 && !exactMatch;
+
+  type DropItem =
+    | { kind: "add"; name: string }
+    | { kind: "person"; person: Person };
+
+  const items: DropItem[] = [
+    ...(showAdd ? [{ kind: "add" as const, name: trimmed }] : []),
+    ...results.map((p) => ({ kind: "person" as const, person: p })),
+  ];
+
+  const commit = (sel: PersonSelection) => {
+    onChange(sel);
+    setOpen(false);
+    setQuery("");
+    setActiveIdx(-1);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); setOpen(true); }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, items.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter" && activeIdx >= 0) {
+      e.preventDefault();
+      const it = items[activeIdx];
+      commit(it.kind === "person" ? { type: "existing", person: it.person } : { type: "new", name: it.name });
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  // Selected chip
+  if (value) {
+    return (
+      <div className="inline-flex items-center gap-1.5 h-8 px-2.5 bg-yellow-100 border border-yellow-400 rounded-lg text-sm max-w-[200px]">
+        {value.type === "existing" && value.person.thumbnailUrl && (
+          <img src={value.person.thumbnailUrl} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+        )}
+        <span className="font-medium text-yellow-900 truncate">
+          {value.type === "existing" ? value.person.name : value.name}
+        </span>
+        {value.type === "new" && (
+          <span className="text-[10px] text-yellow-600 bg-yellow-200 px-1 rounded shrink-0">New</span>
+        )}
+        <button
+          onClick={() => onChange(null)}
+          className="ml-0.5 text-yellow-500 hover:text-yellow-900 shrink-0"
+          title="Clear"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setActiveIdx(-1); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={handleKeyDown}
+        placeholder="Search or add name…"
+        className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent w-48"
+      />
+
+      {open && (
+        <div className="absolute left-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-50 max-h-60 overflow-y-auto">
+          {loading ? (
+            <div className="flex justify-center py-5">
+              <div className="w-5 h-5 border-2 border-gray-200 border-t-yellow-500 rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* "Add new" option */}
+              {showAdd && (
+                <button
+                  onMouseDown={(e) => { e.preventDefault(); commit({ type: "new", name: trimmed }); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-left border-b border-gray-100 transition-colors ${
+                    activeIdx === 0 ? "bg-yellow-50" : "hover:bg-yellow-50"
+                  }`}
+                >
+                  <div className="w-8 h-8 rounded-full bg-yellow-100 flex items-center justify-center text-yellow-600 shrink-0">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-yellow-700">Add "{trimmed}"</div>
+                    <div className="text-xs text-gray-400">Create as new person</div>
+                  </div>
+                </button>
+              )}
+
+              {/* Existing people */}
+              {results.length === 0 && !showAdd ? (
+                <div className="py-6 text-center text-sm text-gray-400">
+                  {query ? "No people found" : "No people yet"}
+                </div>
+              ) : (
+                results.map((person, idx) => {
+                  const itemIdx = showAdd ? idx + 1 : idx;
+                  return (
+                    <button
+                      key={person.id}
+                      onMouseDown={(e) => { e.preventDefault(); commit({ type: "existing", person }); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${
+                        activeIdx === itemIdx ? "bg-gray-100" : "hover:bg-gray-50"
+                      }`}
+                    >
+                      <div className="w-8 h-8 rounded-full bg-gray-100 overflow-hidden shrink-0">
+                        {person.thumbnailUrl ? (
+                          <img src={person.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-gray-300">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate">{person.name}</div>
+                        <div className="text-xs text-gray-400">{person.photoCount} photo{person.photoCount !== 1 ? "s" : ""}</div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Cluster review modal ──────────────────────────────────────────────────────
 function ClusterReviewModal({
   cluster,
-  name,
+  selection,
   onConfirm,
   onCancel,
 }: {
   cluster: FaceCluster;
-  name: string;
+  selection: PersonSelection;
   onConfirm: (faceIds: number[], photoIds: number[]) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -56,6 +260,12 @@ function ClusterReviewModal({
     }
   };
 
+  const label = !selection
+    ? "no name selected"
+    : selection.type === "existing"
+    ? `"${selection.person.name}"`
+    : `"${selection.name}" (new)`;
+
   return (
     <div
       className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-4"
@@ -68,7 +278,7 @@ function ClusterReviewModal({
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
             <h2 className="text-base font-semibold text-gray-900">
-              Review cluster{name ? ` — tagging as "${name}"` : ""}
+              Review cluster — tagging as <span className="text-yellow-700">{label}</span>
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {selected.size} of {cluster.matches.length} selected
@@ -128,7 +338,7 @@ function ClusterReviewModal({
             </button>
             <button
               onClick={handleConfirm}
-              disabled={saving || !selected.size || !name.trim()}
+              disabled={saving || !selected.size || !selection}
               className="px-4 py-1.5 text-sm rounded-full bg-yellow-500 hover:bg-yellow-600 text-white font-medium disabled:opacity-50"
             >
               {saving ? "Saving…" : `Confirm ${selected.size}`}
@@ -140,31 +350,32 @@ function ClusterReviewModal({
   );
 }
 
-// ── Individual cluster row ────────────────────────────────────────────────────
+// ── Cluster row ───────────────────────────────────────────────────────────────
 interface ClusterRowProps {
   cluster: FaceCluster;
-  onConfirm: (cluster: FaceCluster, name: string, faceIds: number[], photoIds: number[]) => Promise<void>;
+  onConfirm: (cluster: FaceCluster, target: ClusterConfirmTarget, faceIds: number[], photoIds: number[]) => Promise<void>;
   onReject: (cluster: FaceCluster) => Promise<void>;
   onExpand: (match: FaceClusterMatch) => void;
 }
 
 function ClusterRow({ cluster, onConfirm, onReject, onExpand }: ClusterRowProps) {
-  const [name, setName] = useState("");
+  const [selection, setSelection] = useState<PersonSelection>(null);
   const [confirming, setConfirming] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reviewing, setReviewing] = useState(false);
-  const [nameError, setNameError] = useState(false);
+  const [selError, setSelError] = useState(false);
 
   const allFaceIds = cluster.matches.map((m) => m.faceId);
   const allPhotoIds = [...new Set(cluster.matches.map((m) => m.photoId))];
   const busy = confirming || rejecting;
 
   const handleConfirmAll = async () => {
-    if (!name.trim()) { setNameError(true); return; }
-    setNameError(false);
+    const target = selectionToTarget(selection);
+    if (!target) { setSelError(true); return; }
+    setSelError(false);
     setConfirming(true);
     try {
-      await onConfirm(cluster, name.trim(), allFaceIds, allPhotoIds);
+      await onConfirm(cluster, target, allFaceIds, allPhotoIds);
     } finally {
       setConfirming(false);
     }
@@ -182,7 +393,7 @@ function ClusterRow({ cluster, onConfirm, onReject, onExpand }: ClusterRowProps)
   return (
     <>
       <div className="flex items-center gap-3 bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-3">
-        {/* Clickable thumbnail strip */}
+        {/* Thumbnail strip */}
         <div className="flex gap-1 shrink-0">
           {cluster.matches.slice(0, 5).map((m) => (
             <button
@@ -201,24 +412,25 @@ function ClusterRow({ cluster, onConfirm, onReject, onExpand }: ClusterRowProps)
           )}
         </div>
 
-        {/* Label + name input */}
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-gray-800">
-            {cluster.size} face{cluster.size !== 1 ? "s" : ""} look like they belong to the same person
+        {/* Cluster info */}
+        <div className="shrink-0 w-40">
+          <div className="text-sm font-medium text-gray-800 leading-tight">
+            {cluster.size} face{cluster.size !== 1 ? "s" : ""} — same person?
           </div>
-          <div className="mt-1.5 flex items-center gap-2">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => { setName(e.target.value); setNameError(false); }}
-              onKeyDown={(e) => { if (e.key === "Enter") handleConfirmAll(); }}
-              placeholder="Enter a name…"
-              className={`text-sm border rounded-lg px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent w-44 ${
-                nameError ? "border-red-400 bg-red-50" : "border-gray-300"
-              }`}
-            />
-            {nameError && <span className="text-xs text-red-500">Name required</span>}
+          <div className="text-xs text-gray-400 mt-0.5">
+            {(cluster.matches[0]?.confidence * 100).toFixed(0)}% best match
           </div>
+        </div>
+
+        {/* Combo-box + error */}
+        <div className="flex-1 flex flex-col gap-0.5 min-w-0">
+          <PersonComboBox
+            value={selection}
+            onChange={(v) => { setSelection(v); setSelError(false); }}
+          />
+          {selError && (
+            <span className="text-xs text-red-500">Select or create a person first</span>
+          )}
         </div>
 
         {/* Actions */}
@@ -241,7 +453,7 @@ function ClusterRow({ cluster, onConfirm, onReject, onExpand }: ClusterRowProps)
             onClick={handleReject}
             disabled={busy}
             className="w-7 h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors"
-            title="Skip this cluster permanently"
+            title="Skip — never show this cluster again"
           >
             {rejecting ? (
               <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
@@ -257,9 +469,11 @@ function ClusterRow({ cluster, onConfirm, onReject, onExpand }: ClusterRowProps)
       {reviewing && (
         <ClusterReviewModal
           cluster={cluster}
-          name={name}
+          selection={selection}
           onConfirm={async (faceIds, photoIds) => {
-            await onConfirm(cluster, name.trim() || "Unknown", faceIds, photoIds);
+            const target = selectionToTarget(selection);
+            if (!target) return;
+            await onConfirm(cluster, target, faceIds, photoIds);
             setReviewing(false);
           }}
           onCancel={() => setReviewing(false)}
@@ -269,7 +483,7 @@ function ClusterRow({ cluster, onConfirm, onReject, onExpand }: ClusterRowProps)
   );
 }
 
-// ── Main view ────────────────────────────────────────────────────────────────
+// ── Main view ─────────────────────────────────────────────────────────────────
 export function UnidentifiedFaces({ onBack }: UnidentifiedFacesProps) {
   const [clusters, setClusters] = useState<FaceCluster[]>([]);
   const [totalClusters, setTotalClusters] = useState(0);
@@ -316,8 +530,13 @@ export function UnidentifiedFaces({ onBack }: UnidentifiedFacesProps) {
     loadClusters(0, false, true);
   };
 
-  const handleConfirm = useCallback(async (cluster: FaceCluster, name: string, faceIds: number[], photoIds: number[]) => {
-    await confirmFaceCluster(name, faceIds, photoIds);
+  const handleConfirm = useCallback(async (
+    cluster: FaceCluster,
+    target: ClusterConfirmTarget,
+    faceIds: number[],
+    photoIds: number[]
+  ) => {
+    await confirmFaceCluster(target, faceIds, photoIds);
     setClusters((prev) => prev.filter((c) => c.clusterId !== cluster.clusterId));
     setTotalClusters((t) => Math.max(0, t - 1));
   }, []);
@@ -369,18 +588,18 @@ export function UnidentifiedFaces({ onBack }: UnidentifiedFacesProps) {
         </div>
       )}
 
-      {/* Loading */}
+      {/* States */}
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <div className="w-8 h-8 border-2 border-gray-200 border-t-yellow-500 rounded-full animate-spin mb-3" />
           <p className="text-sm">Clustering faces… this may take a moment</p>
-          <p className="text-xs mt-1 text-gray-300">Analyzing up to 3,000 face embeddings</p>
+          <p className="text-xs mt-1 text-gray-300">Analyzing up to 3,000 face embeddings at 90% similarity</p>
         </div>
       ) : clusters.length === 0 ? (
         <div className="text-center py-16 text-gray-500">
           <div className="text-5xl mb-4">🎉</div>
           <h3 className="text-lg font-medium mb-2">No clusters found</h3>
-          <p className="text-sm">All faces are either identified or have no similar matches at 90% similarity.</p>
+          <p className="text-sm">No unidentified face groups found at 90% similarity.</p>
           <button onClick={handleRecompute} className="mt-4 text-sm text-blue-600 hover:underline">
             Recompute
           </button>
@@ -420,6 +639,7 @@ export function UnidentifiedFaces({ onBack }: UnidentifiedFacesProps) {
         </>
       )}
 
+      {/* Face expand modal */}
       {expandMatch && (
         <FaceExpandModal
           imageUrl={expandMatch.thumbnailUrl.replace(/\/thumbnails\/(\d+)/, "/api/photos/$1/file")}

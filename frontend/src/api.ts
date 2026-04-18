@@ -1314,14 +1314,18 @@ export async function fetchFaceClusters(
   };
 }
 
+export type ClusterConfirmTarget =
+  | { personId: number }
+  | { name: string };
+
 export async function confirmFaceCluster(
-  name: string,
+  target: ClusterConfirmTarget,
   faceIds: number[],
   photoIds: number[]
 ): Promise<{ person: { id: number; name: string } }> {
   const res = await fetchWithAuth(`${API_BASE}/api/faces/clusters/confirm`, {
     method: "POST",
-    body: JSON.stringify({ name, faceIds, photoIds }),
+    body: JSON.stringify({ ...target, faceIds, photoIds }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
