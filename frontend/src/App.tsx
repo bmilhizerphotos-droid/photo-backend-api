@@ -726,7 +726,6 @@ export default function App() {
             loading={suggestionsLoading}
             onConfirmAll={handleConfirmSuggestion}
             onReview={(s) => setReviewSuggestion(s)}
-            onDismiss={(personId) => setDismissedPersonIds((prev) => new Set([...prev, personId]))}
             onRejectAll={handleRejectSuggestion}
             onExpand={(match, personName) => setExpandFace({ match, personName })}
           />

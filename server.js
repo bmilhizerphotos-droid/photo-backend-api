@@ -1586,7 +1586,7 @@ app.post("/api/people/suggestions/confirm", authenticateToken, async (req, res) 
     const phs = photoIds.map(() => "?").join(",");
     const photos = await dbAll(`SELECT full_path FROM photos WHERE id IN (${phs})`, photoIds);
     for (const photo of photos) {
-      if (photo.full_path) writePersonMetadata(photo.full_path, person.name).catch(() => {});
+      if (photo.full_path) writeExifPersonName(photo.full_path, person.name).catch(() => {});
     }
 
     res.json({ success: true, tagged: photoIds.length });
