@@ -7,6 +7,7 @@ import {
   fetchPhotoTaggedPeople,
   identifyFace,
   createPersonFromFace,
+  createPerson,
   tagPersonInPhoto,
   removePersonTagFromPhoto,
 } from '../api';
@@ -28,6 +29,7 @@ export function FaceTagModal({ photo, imageUrl, onClose, onUpdate }: FaceTagModa
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Load faces and tagged people on mount
   useEffect(() => {
@@ -67,6 +69,11 @@ export function FaceTagModal({ photo, imageUrl, onClose, onUpdate }: FaceTagModa
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose, showPicker, showManualTag]);
 
+  const showSuccess = useCallback((msg: string) => {
+    setSuccessMsg(msg);
+    setTimeout(() => setSuccessMsg(null), 3000);
+  }, []);
+
   const handleFaceClick = useCallback((face: Face) => {
     if (face.personId) return; // Already identified
     setSelectedFace(face);
@@ -75,76 +82,82 @@ export function FaceTagModal({ photo, imageUrl, onClose, onUpdate }: FaceTagModa
 
   const handleSelectPerson = useCallback(async (person: Person) => {
     if (!selectedFace) return;
-
     setSaving(true);
+    setError(null);
     try {
       await identifyFace(selectedFace.id, person.id);
-
-      // Update local state
       setFaces(prev => prev.map(f =>
-        f.id === selectedFace.id
-          ? { ...f, personId: person.id, personName: person.name }
-          : f
+        f.id === selectedFace.id ? { ...f, personId: person.id, personName: person.name } : f
       ));
-
-      // Add to tagged people if not already there
       if (!taggedPeople.some(p => p.id === person.id)) {
         setTaggedPeople(prev => [...prev, person]);
       }
-
       setShowPicker(false);
       setSelectedFace(null);
+      showSuccess(`Tagged as ${person.name}`);
       onUpdate?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to identify face');
     } finally {
       setSaving(false);
     }
-  }, [selectedFace, taggedPeople, onUpdate]);
+  }, [selectedFace, taggedPeople, onUpdate, showSuccess]);
 
   const handleCreatePerson = useCallback(async (name: string) => {
     if (!selectedFace) return;
-
     setSaving(true);
+    setError(null);
     try {
       const result = await createPersonFromFace(selectedFace.id, name);
-
-      // Update local state
       setFaces(prev => prev.map(f =>
-        f.id === selectedFace.id
-          ? { ...f, personId: result.person.id, personName: result.person.name }
-          : f
+        f.id === selectedFace.id ? { ...f, personId: result.person.id, personName: result.person.name } : f
       ));
-
       setTaggedPeople(prev => [...prev, result.person]);
-
       setShowPicker(false);
       setSelectedFace(null);
+      showSuccess(`Created & tagged ${result.person.name} — metadata written`);
       onUpdate?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create person');
     } finally {
       setSaving(false);
     }
-  }, [selectedFace, onUpdate]);
+  }, [selectedFace, onUpdate, showSuccess]);
 
   const handleManualTag = useCallback(async (person: Person) => {
     setSaving(true);
+    setError(null);
     try {
       await tagPersonInPhoto(photo.id, person.id);
-
       if (!taggedPeople.some(p => p.id === person.id)) {
         setTaggedPeople(prev => [...prev, person]);
       }
-
       setShowManualTag(false);
+      showSuccess(`Tagged ${person.name}`);
       onUpdate?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to tag person');
     } finally {
       setSaving(false);
     }
-  }, [photo.id, taggedPeople, onUpdate]);
+  }, [photo.id, taggedPeople, onUpdate, showSuccess]);
+
+  const handleManualCreatePerson = useCallback(async (name: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const newPerson = await createPerson(name);
+      await tagPersonInPhoto(photo.id, newPerson.id);
+      setTaggedPeople(prev => [...prev, newPerson]);
+      setShowManualTag(false);
+      showSuccess(`Created ${newPerson.name} and tagged in photo`);
+      onUpdate?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create person');
+    } finally {
+      setSaving(false);
+    }
+  }, [photo.id, onUpdate, showSuccess]);
 
   const handleRemoveTag = useCallback(async (personId: number) => {
     setSaving(true);
@@ -198,6 +211,13 @@ export function FaceTagModal({ photo, imageUrl, onClose, onUpdate }: FaceTagModa
             </svg>
           </button>
         </div>
+
+        {/* Success toast */}
+        {successMsg && (
+          <div className="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center gap-2">
+            <span className="text-green-600 text-sm font-medium">✓ {successMsg}</span>
+          </div>
+        )}
 
         {/* Error message */}
         {error && (
@@ -346,19 +366,7 @@ export function FaceTagModal({ photo, imageUrl, onClose, onUpdate }: FaceTagModa
           <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-10">
             <PersonTagPicker
               onSelect={handleManualTag}
-              onCreateNew={async (name) => {
-                // For manual tag without face, we need to create the person differently
-                // We'll just tag them manually after creating
-                setSaving(true);
-                try {
-                  // Create via the regular people API would be ideal, but for now
-                  // we'll just show an error since we need a face to create a person
-                  setError('To create a new person, please click on a detected face');
-                  setShowManualTag(false);
-                } finally {
-                  setSaving(false);
-                }
-              }}
+              onCreateNew={handleManualCreatePerson}
               onCancel={() => setShowManualTag(false)}
               excludeIds={taggedPeople.map(p => p.id)}
             />

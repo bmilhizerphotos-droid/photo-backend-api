@@ -447,8 +447,10 @@ export async function fetchUnidentifiedCount(): Promise<{
 }
 
 export async function fetchPhotoFaces(photoId: number): Promise<Face[]> {
-  void photoId;
-  return [];
+  const url = `${API_BASE}/api/photos/${photoId}/faces`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error(`Failed to fetch faces: ${res.status}`);
+  return res.json();
 }
 
 export async function fetchPhotoTaggedPeople(photoId: number): Promise<Person[]> {
@@ -521,12 +523,34 @@ export async function removePersonTagFromPhoto(photoId: number, personId: number
   }
 }
 
-export async function identifyFace(_faceId: number, _personId: number): Promise<void> {
-  throw new Error("Face identification is not available in this build yet.");
+export async function identifyFace(faceId: number, personId: number): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/api/faces/${faceId}/identify`, {
+    method: "POST",
+    body: JSON.stringify({ personId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
-export async function createPersonFromFace(_faceId: number, _name: string): Promise<{ person: Person }> {
-  throw new Error("Creating a person from a face is not available in this build yet.");
+export async function createPersonFromFace(faceId: number, name: string): Promise<{ person: Person }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/faces/${faceId}/create-person`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createPerson(name: string): Promise<Person> {
+  const res = await fetchWithAuth(`${API_BASE}/api/people/create`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Failed to create person");
+  }
+  const data = await res.json();
+  return data.person;
 }
 
 export async function fetchUnidentifiedPhotos(_offset = 0, _limit = 50): Promise<{

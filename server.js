@@ -2162,38 +2162,160 @@ app.get(["/api/photos/:id(\\d+)/file", "/api/photos/:id(\\d+)"], authenticateTok
 app.get("/api/photos/:id/faces", authenticateToken, async (req, res) => {
   try {
     const photoId = validatePhotoId(req.params.id);
-    if (photoId === null) {
-      return res.status(400).json({ error: "Invalid photo ID" });
+    if (photoId === null) return res.status(400).json({ error: "Invalid photo ID" });
+
+    // Prefer face_embeddings (InsightFace, has per-face person_id)
+    const feCheck = await dbGet("SELECT name FROM sqlite_master WHERE type='table' AND name='face_embeddings'");
+    if (feCheck) {
+      const rows = await dbAll(
+        `SELECT fe.id, fe.bbox_x, fe.bbox_y, fe.bbox_width, fe.bbox_height, fe.confidence,
+                fe.person_id, p.name as person_name
+         FROM face_embeddings fe
+         LEFT JOIN people p ON p.id = fe.person_id
+         WHERE fe.photo_id = ?
+         ORDER BY fe.id`,
+        [photoId]
+      );
+      if (rows.length > 0) {
+        return res.json(rows.map((f) => ({
+          id: f.id,
+          personId: f.person_id ?? null,
+          personName: f.person_name ?? null,
+          bbox: { x: f.bbox_x, y: f.bbox_y, width: f.bbox_width, height: f.bbox_height },
+          confidence: f.confidence,
+        })));
+      }
     }
 
+    // Fall back to legacy faces table
     const tableCheck = await dbGet("SELECT name FROM sqlite_master WHERE type='table' AND name='faces'");
     if (!tableCheck) return res.json([]);
-
     const rows = await dbAll(
-      `SELECT id, box_x, box_y, box_width, box_height, confidence
-       FROM faces
-       WHERE photo_id = ?
-       ORDER BY id`,
+      `SELECT id, box_x, box_y, box_width, box_height, confidence FROM faces WHERE photo_id = ? ORDER BY id`,
       [photoId]
     );
-
-    res.json(
-      (rows || []).map((face) => ({
-        id: face.id,
-        personId: null,
-        personName: null,
-        bbox: {
-          x: face.box_x,
-          y: face.box_y,
-          width: face.box_width,
-          height: face.box_height,
-        },
-        confidence: face.confidence,
-      }))
-    );
+    res.json((rows || []).map((f) => ({
+      id: f.id, personId: null, personName: null,
+      bbox: { x: f.box_x, y: f.box_y, width: f.box_width, height: f.box_height },
+      confidence: f.confidence,
+    })));
   } catch (err) {
     console.error("Failed to load photo faces:", err);
     res.status(500).json({ error: "Failed to load photo faces" });
+  }
+});
+
+// ── ExifTool write-back helper ───────────────────────────────────────────────
+const EXIFTOOL = path.join(__dirname, "exiftool.exe");
+
+function writeExifPersonName(filePath, personName) {
+  return new Promise((resolve) => {
+    const tool = fs.existsSync(EXIFTOOL) ? EXIFTOOL : "exiftool";
+    const cmd = `"${tool}" -overwrite_original -XMP-mwg-rs:RegionName="${personName.replace(/"/g, '\\"')}" "${filePath}"`;
+    exec(cmd, (err) => {
+      if (err) console.log("[exiftool] write skipped:", err.message?.split("\n")[0]);
+      resolve();
+    });
+  });
+}
+
+// POST /api/faces/:faceId/identify — link a detected face to an existing person
+app.post("/api/faces/:faceId/identify", authenticateToken, async (req, res) => {
+  try {
+    const faceId = Number(req.params.faceId);
+    const personId = Number(req.body?.personId);
+    if (!Number.isInteger(faceId) || faceId <= 0 || !Number.isInteger(personId) || personId <= 0) {
+      return res.status(400).json({ error: "Valid faceId and personId required" });
+    }
+
+    const face = await dbGet("SELECT id, photo_id FROM face_embeddings WHERE id = ?", [faceId]);
+    if (!face) return res.status(404).json({ error: "Face not found" });
+
+    const person = await dbGet("SELECT id, name FROM people WHERE id = ?", [personId]);
+    if (!person) return res.status(404).json({ error: "Person not found" });
+
+    // Link face → person
+    await dbRun("UPDATE face_embeddings SET person_id = ? WHERE id = ?", [personId, faceId]);
+
+    // Tag photo → person
+    await dbRun("INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)", [face.photo_id, personId]);
+    const cnt = await dbGet("SELECT COUNT(*) as c FROM photo_people WHERE person_id = ?", [personId]);
+    await dbRun("UPDATE people SET photo_count = ? WHERE id = ?", [cnt.c, personId]);
+
+    // ExifTool write-back (best-effort)
+    const photo = await dbGet("SELECT full_path FROM photos WHERE id = ?", [face.photo_id]);
+    if (photo?.full_path) writeExifPersonName(photo.full_path, person.name).catch(() => {});
+
+    res.json({ success: true, person: { id: person.id, name: person.name } });
+  } catch (err) {
+    console.error("POST /api/faces/:id/identify error:", err);
+    res.status(500).json({ error: "Failed to identify face" });
+  }
+});
+
+// POST /api/faces/:faceId/create-person — create a new person from a detected face
+app.post("/api/faces/:faceId/create-person", authenticateToken, async (req, res) => {
+  try {
+    const faceId = Number(req.params.faceId);
+    const name = String(req.body?.name || "").trim();
+    if (!Number.isInteger(faceId) || faceId <= 0 || !name) {
+      return res.status(400).json({ error: "Valid faceId and name required" });
+    }
+
+    const face = await dbGet("SELECT id, photo_id FROM face_embeddings WHERE id = ?", [faceId]);
+    if (!face) return res.status(404).json({ error: "Face not found" });
+
+    // Create person
+    await dbRun(
+      "INSERT INTO people (name, thumbnail_photo_id, photo_count) VALUES (?, ?, 0)",
+      [name, face.photo_id]
+    );
+    const newPerson = await dbGet("SELECT id, name FROM people WHERE name = ? ORDER BY id DESC LIMIT 1", [name]);
+
+    // Link face → person
+    await dbRun("UPDATE face_embeddings SET person_id = ? WHERE id = ?", [newPerson.id, faceId]);
+
+    // Tag photo → person
+    await dbRun("INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)", [face.photo_id, newPerson.id]);
+    await dbRun("UPDATE people SET photo_count = 1 WHERE id = ?", [newPerson.id]);
+
+    // ExifTool write-back (best-effort)
+    const photo = await dbGet("SELECT full_path FROM photos WHERE id = ?", [face.photo_id]);
+    if (photo?.full_path) writeExifPersonName(photo.full_path, name).catch(() => {});
+
+    const protocol = req.get("x-forwarded-proto") || req.protocol;
+    const host = req.get("x-forwarded-host") || req.get("host");
+    res.json({
+      success: true,
+      person: {
+        id: newPerson.id,
+        name: newPerson.name,
+        photoCount: 1,
+        thumbnailUrl: `${protocol}://${host}/thumbnails/${face.photo_id}`,
+      },
+    });
+  } catch (err) {
+    console.error("POST /api/faces/:id/create-person error:", err);
+    res.status(500).json({ error: "Failed to create person" });
+  }
+});
+
+// POST /api/people/create — create a person without a face (manual tag flow)
+app.post("/api/people/create", authenticateToken, async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Name is required" });
+
+    const existing = await dbGet("SELECT id FROM people WHERE LOWER(name) = LOWER(?)", [name]);
+    if (existing) return res.status(409).json({ error: "Person with that name already exists", personId: existing.id });
+
+    await dbRun("INSERT INTO people (name, photo_count) VALUES (?, 0)", [name]);
+    const newPerson = await dbGet("SELECT id, name FROM people WHERE name = ? ORDER BY id DESC LIMIT 1", [name]);
+
+    res.json({ success: true, person: { id: newPerson.id, name: newPerson.name, photoCount: 0, thumbnailUrl: null } });
+  } catch (err) {
+    console.error("POST /api/people/create error:", err);
+    res.status(500).json({ error: "Failed to create person" });
   }
 });
 
@@ -2239,16 +2361,18 @@ app.post("/api/photos/:photoId/people", authenticateToken, async (req, res) => {
       return res.status(400).json({ error: "Valid photoId and personId are required" });
     }
 
-    await dbRun(
-      "INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)",
-      [photoId, personId]
-    );
-
-    const photoCount = await dbGet(
-      "SELECT COUNT(*) AS count FROM photo_people WHERE person_id = ?",
-      [personId]
-    );
+    await dbRun("INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)", [photoId, personId]);
+    const photoCount = await dbGet("SELECT COUNT(*) AS count FROM photo_people WHERE person_id = ?", [personId]);
     await dbRun("UPDATE people SET photo_count = ? WHERE id = ?", [photoCount?.count || 0, personId]);
+
+    // ExifTool write-back (best-effort)
+    const [person, photo] = await Promise.all([
+      dbGet("SELECT name FROM people WHERE id = ?", [personId]),
+      dbGet("SELECT full_path FROM photos WHERE id = ?", [photoId]),
+    ]);
+    if (person?.name && photo?.full_path) {
+      writeExifPersonName(photo.full_path, person.name).catch(() => {});
+    }
 
     res.json({ success: true });
   } catch (err) {
