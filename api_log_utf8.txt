@@ -1,0 +1,771 @@
+﻿commit e99e2bb7e8adb4058f2b2c0c8e92c4203c70b0ee
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sun Feb 15 01:08:09 2026 -0600
+
+    fix: improve API timeout error messages for better user feedback
+    
+    Co-authored-by: aider (ollama_chat/qwen3-coder:30b) <aider@aider.chat>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index 380ff95..da5db4c 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -57,6 +57,7 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
+   } catch (error: any) {
+     if (error.name === 'AbortError') {
+       console.error("Timeout fetching photos");
++      throw new Error("Request timeout - please check your internet connection");
+     } else {
+       console.error("Error fetching photos:", error);
+     }
+@@ -82,6 +83,7 @@ export async function fetchAlbums(): Promise<Album[]> {
+   } catch (error: any) {
+     if (error.name === 'AbortError') {
+       console.error("Timeout fetching albums");
++      throw new Error("Request timeout - please check your internet connection");
+     } else {
+       console.error("Error fetching albums:", error);
+     }
+@@ -106,6 +108,7 @@ export async function fetchPeople(): Promise<Person[]> {
+   } catch (error: any) {
+     if (error.name === 'AbortError') {
+       console.error("Timeout fetching people");
++      throw new Error("Request timeout - please check your internet connection");
+     } else {
+       console.error("Error fetching people:", error);
+     }
+@@ -137,6 +140,7 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+   } catch (error: any) {
+     if (error.name === 'AbortError') {
+       console.error("Timeout fetching person photos");
++      throw new Error("Request timeout - please check your internet connection");
+     } else {
+       console.error("Error fetching person photos:", error);
+     }
+@@ -165,6 +169,7 @@ export async function searchPhotos(query: string): Promise<Photo[]> {
+   } catch (error: any) {
+     if (error.name === 'AbortError') {
+       console.error("Timeout searching photos");
++      throw new Error("Request timeout - please check your internet connection");
+     } else {
+       console.error("Error searching photos:", error);
+     }
+@@ -191,6 +196,7 @@ export async function fetchUnidentifiedCount(): Promise<{
+   } catch (error: any) {
+     if (error.name === 'AbortError') {
+       console.error("Timeout fetching unidentified count");
++      throw new Error("Request timeout - please check your internet connection");
+     } else {
+       console.error("Error fetching unidentified count:", error);
+     }
+
+commit e17d253f336e31b447ee6ad4259a3740287773cc
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 14 22:11:42 2026 -0600
+
+    fix: add 10s timeout to all API calls and improve error handling for network failures
+    
+    Co-authored-by: aider (ollama_chat/qwen3-coder:30b) <aider@aider.chat>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index 5419b60..380ff95 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -46,14 +46,20 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
+     : `/api/photos?offset=${offset}&limit=${limit}`;
+ 
+   try {
+-    const res = await fetch(url);
++    const res = await fetch(url, { 
++      signal: AbortSignal.timeout(10000) // 10 second timeout
++    });
+     if (!res.ok) {
+       throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
+     }
+     const data = await res.json();
+     return data.photos ?? data;
+-  } catch (error) {
+-    console.error("Error fetching photos:", error);
++  } catch (error: any) {
++    if (error.name === 'AbortError') {
++      console.error("Timeout fetching photos");
++    } else {
++      console.error("Error fetching photos:", error);
++    }
+     // Return empty array on failure to prevent app crash
+     return [];
+   }
+@@ -66,13 +72,19 @@ export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
+ export async function fetchAlbums(): Promise<Album[]> {
+   const url = API_BASE ? `${API_BASE}/api/albums` : `/api/albums`;
+   try {
+-    const res = await fetch(url);
++    const res = await fetch(url, { 
++      signal: AbortSignal.timeout(10000) // 10 second timeout
++    });
+     if (!res.ok) {
+       throw new Error(`Failed to fetch albums: ${res.status} ${res.statusText}`);
+     }
+     return res.json();
+-  } catch (error) {
+-    console.error("Error fetching albums:", error);
++  } catch (error: any) {
++    if (error.name === 'AbortError') {
++      console.error("Timeout fetching albums");
++    } else {
++      console.error("Error fetching albums:", error);
++    }
+     return [];
+   }
+ }
+@@ -84,13 +96,19 @@ export async function fetchAlbums(): Promise<Album[]> {
+ export async function fetchPeople(): Promise<Person[]> {
+   const url = API_BASE ? `${API_BASE}/api/people` : `/api/people`;
+   try {
+-    const res = await fetch(url);
++    const res = await fetch(url, { 
++      signal: AbortSignal.timeout(10000) // 10 second timeout
++    });
+     if (!res.ok) {
+       throw new Error(`Failed to fetch people: ${res.status} ${res.statusText}`);
+     }
+     return res.json();
+-  } catch (error) {
+-    console.error("Error fetching people:", error);
++  } catch (error: any) {
++    if (error.name === 'AbortError') {
++      console.error("Timeout fetching people");
++    } else {
++      console.error("Error fetching people:", error);
++    }
+     return [];
+   }
+ }
+@@ -101,7 +119,9 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+     : `/api/people/${personId}/photos`;
+ 
+   try {
+-    const res = await fetch(url);
++    const res = await fetch(url, { 
++      signal: AbortSignal.timeout(10000) // 10 second timeout
++    });
+     if (!res.ok) {
+       throw new Error(`Failed to fetch person photos: ${res.status} ${res.statusText}`);
+     }
+@@ -114,8 +134,12 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+     } else {
+       return [];
+     }
+-  } catch (error) {
+-    console.error("Error fetching person photos:", error);
++  } catch (error: any) {
++    if (error.name === 'AbortError') {
++      console.error("Timeout fetching person photos");
++    } else {
++      console.error("Error fetching person photos:", error);
++    }
+     return [];
+   }
+ }
+@@ -130,14 +154,20 @@ export async function searchPhotos(query: string): Promise<Photo[]> {
+     : `/api/search?q=${encodeURIComponent(query)}`;
+ 
+   try {
+-    const res = await fetch(url);
++    const res = await fetch(url, { 
++      signal: AbortSignal.timeout(10000) // 10 second timeout
++    });
+     if (!res.ok) {
+       throw new Error(`Search failed: ${res.status} ${res.statusText}`);
+     }
+     const data = await res.json();
+     return Array.isArray(data?.photos) ? data.photos : [];
+-  } catch (error) {
+-    console.error("Error searching photos:", error);
++  } catch (error: any) {
++    if (error.name === 'AbortError') {
++      console.error("Timeout searching photos");
++    } else {
++      console.error("Error searching photos:", error);
++    }
+     return [];
+   }
+ }
+@@ -151,13 +181,19 @@ export async function fetchUnidentifiedCount(): Promise<{
+     : `/api/people/unidentified`;
+ 
+   try {
+-    const res = await fetch(url);
++    const res = await fetch(url, { 
++      signal: AbortSignal.timeout(10000) // 10 second timeout
++    });
+     if (!res.ok) {
+       throw new Error(`Failed to fetch unidentified count: ${res.status} ${res.statusText}`);
+     }
+     return res.json();
+-  } catch (error) {
+-    console.error("Error fetching unidentified count:", error);
++  } catch (error: any) {
++    if (error.name === 'AbortError') {
++      console.error("Timeout fetching unidentified count");
++    } else {
++      console.error("Error fetching unidentified count:", error);
++    }
+     return { photoCount: 0, faceCount: 0 };
+   }
+ }
+
+commit deb2eaabe613dbaf7d58c4f5b6cd37dedb7b4f69
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 14 21:16:19 2026 -0600
+
+    fix: improve API error handling and add detailed error logging for all fetch operations
+    
+    Co-authored-by: aider (ollama_chat/qwen3-coder:30b) <aider@aider.chat>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index b5373cd..5419b60 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -40,17 +40,23 @@ export interface Person {
+    PHOTOS
+    ===================== */
+ 
+-export async function fetchPhotos(offset = 0, limit = 50) {
++export async function fetchPhotos(offset = 0, limit = 50): Promise<Photo[]> {
+   const url = API_BASE
+     ? `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
+     : `/api/photos?offset=${offset}&limit=${limit}`;
+ 
+-  const res = await fetch(url);
+-  if (!res.ok) {
+-    throw new Error("Failed to fetch photos");
++  try {
++    const res = await fetch(url);
++    if (!res.ok) {
++      throw new Error(`Failed to fetch photos: ${res.status} ${res.statusText}`);
++    }
++    const data = await res.json();
++    return data.photos ?? data;
++  } catch (error) {
++    console.error("Error fetching photos:", error);
++    // Return empty array on failure to prevent app crash
++    return [];
+   }
+-  const data = await res.json();
+-  return data.photos ?? data;
+ }
+ 
+ /* =====================
+@@ -59,9 +65,16 @@ export async function fetchPhotos(offset = 0, limit = 50) {
+ 
+ export async function fetchAlbums(): Promise<Album[]> {
+   const url = API_BASE ? `${API_BASE}/api/albums` : `/api/albums`;
+-  const res = await fetch(url);
+-  if (!res.ok) return [];
+-  return res.json();
++  try {
++    const res = await fetch(url);
++    if (!res.ok) {
++      throw new Error(`Failed to fetch albums: ${res.status} ${res.statusText}`);
++    }
++    return res.json();
++  } catch (error) {
++    console.error("Error fetching albums:", error);
++    return [];
++  }
+ }
+ 
+ /* =====================
+@@ -70,11 +83,16 @@ export async function fetchAlbums(): Promise<Album[]> {
+ 
+ export async function fetchPeople(): Promise<Person[]> {
+   const url = API_BASE ? `${API_BASE}/api/people` : `/api/people`;
+-  const res = await fetch(url);
+-  if (!res.ok) {
+-    throw new Error("Failed to fetch people");
++  try {
++    const res = await fetch(url);
++    if (!res.ok) {
++      throw new Error(`Failed to fetch people: ${res.status} ${res.statusText}`);
++    }
++    return res.json();
++  } catch (error) {
++    console.error("Error fetching people:", error);
++    return [];
+   }
+-  return res.json();
+ }
+ 
+ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+@@ -82,17 +100,22 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+     ? `${API_BASE}/api/people/${personId}/photos`
+     : `/api/people/${personId}/photos`;
+ 
+-  const res = await fetch(url);
+-  if (!res.ok) {
+-    throw new Error("Failed to fetch person photos");
+-  }
+-  const data = await res.json();
+-  // Ensure we always return an array, even if the API returns a single photo object
+-  if (Array.isArray(data)) {
+-    return data;
+-  } else if (data.photos && Array.isArray(data.photos)) {
+-    return data.photos;
+-  } else {
++  try {
++    const res = await fetch(url);
++    if (!res.ok) {
++      throw new Error(`Failed to fetch person photos: ${res.status} ${res.statusText}`);
++    }
++    const data = await res.json();
++    // Ensure we always return an array, even if the API returns a single photo object
++    if (Array.isArray(data)) {
++      return data;
++    } else if (data.photos && Array.isArray(data.photos)) {
++      return data.photos;
++    } else {
++      return [];
++    }
++  } catch (error) {
++    console.error("Error fetching person photos:", error);
+     return [];
+   }
+ }
+@@ -106,12 +129,17 @@ export async function searchPhotos(query: string): Promise<Photo[]> {
+     ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}`
+     : `/api/search?q=${encodeURIComponent(query)}`;
+ 
+-  const res = await fetch(url);
+-  if (!res.ok) {
+-    throw new Error("Search failed");
++  try {
++    const res = await fetch(url);
++    if (!res.ok) {
++      throw new Error(`Search failed: ${res.status} ${res.statusText}`);
++    }
++    const data = await res.json();
++    return Array.isArray(data?.photos) ? data.photos : [];
++  } catch (error) {
++    console.error("Error searching photos:", error);
++    return [];
+   }
+-  const data = await res.json();
+-  return Array.isArray(data?.photos) ? data.photos : [];
+ }
+ 
+ export async function fetchUnidentifiedCount(): Promise<{
+@@ -122,9 +150,14 @@ export async function fetchUnidentifiedCount(): Promise<{
+     ? `${API_BASE}/api/people/unidentified`
+     : `/api/people/unidentified`;
+ 
+-  const res = await fetch(url);
+-  if (!res.ok) {
+-    throw new Error("Failed to fetch unidentified count");
++  try {
++    const res = await fetch(url);
++    if (!res.ok) {
++      throw new Error(`Failed to fetch unidentified count: ${res.status} ${res.statusText}`);
++    }
++    return res.json();
++  } catch (error) {
++    console.error("Error fetching unidentified count:", error);
++    return { photoCount: 0, faceCount: 0 };
+   }
+-  return res.json();
+ }
+
+commit 4fc8d53f134f4d860e18d323eee9bed727aa38b8
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 14 18:55:52 2026 -0600
+
+    fix: improve fetchPersonPhotos to handle various API response formats and ensure consistent array return type
+    
+    Co-authored-by: aider (ollama_chat/qwen3-coder:30b) <aider@aider.chat>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index ac005c8..b5373cd 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -87,7 +87,14 @@ export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+     throw new Error("Failed to fetch person photos");
+   }
+   const data = await res.json();
+-  return data.photos ?? data;
++  // Ensure we always return an array, even if the API returns a single photo object
++  if (Array.isArray(data)) {
++    return data;
++  } else if (data.photos && Array.isArray(data.photos)) {
++    return data.photos;
++  } else {
++    return [];
++  }
+ }
+ 
+ /* =====================
+
+commit d488c14c6b634a2ca9d0b82e5cc4e36b668c2c32
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 14 17:51:41 2026 -0600
+
+    fix: add proper return type and data handling to fetchPersonPhotos function in frontend API
+    
+    Co-authored-by: aider (ollama_chat/qwen3-coder:30b) <aider@aider.chat>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index 7bea94a..ac005c8 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -77,7 +77,7 @@ export async function fetchPeople(): Promise<Person[]> {
+   return res.json();
+ }
+ 
+-export async function fetchPersonPhotos(personId: number) {
++export async function fetchPersonPhotos(personId: number): Promise<Photo[]> {
+   const url = API_BASE
+     ? `${API_BASE}/api/people/${personId}/photos`
+     : `/api/people/${personId}/photos`;
+@@ -86,7 +86,8 @@ export async function fetchPersonPhotos(personId: number) {
+   if (!res.ok) {
+     throw new Error("Failed to fetch person photos");
+   }
+-  return res.json();
++  const data = await res.json();
++  return data.photos ?? data;
+ }
+ 
+ /* =====================
+
+commit 4e2c58da29acde781f6e0dd6a1d461b0c81e6839
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Tue Feb 10 23:20:27 2026 -0600
+
+    Fix search results not rendering and add API_BASE to search fetch
+    
+    The search effect's cancelled flag in .finally() could leave searchLoading
+    stuck at true, preventing PhotoMasonry from rendering results. Also moved
+    the inline fetch to a searchPhotos() function in api.ts with proper
+    API_BASE prefix so search works in production (not just via Vite proxy).
+    
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index cd0683c..7bea94a 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -1,6 +1,10 @@
+ // frontend/src/api.ts
+ 
+-const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? "";
++// IMPORTANT:
++// - In dev: use relative /api (Vite proxy ΓåÆ no CORS)
++// - In prod: VITE_API_BASE_URL is injected at build time
++const API_BASE =
++  (import.meta as any).env?.VITE_API_BASE_URL?.replace(/\/+$/, "") ?? "";
+ 
+ /* =====================
+    TYPES
+@@ -20,7 +24,7 @@ export interface Album {
+   description: string | null;
+   coverPhotoId: number | null;
+   coverPhotoUrl: string | null;
+-  photoCount: number;
++  photoCount: number | null;
+   createdAt: string;
+   updatedAt: string;
+ }
+@@ -37,9 +41,11 @@ export interface Person {
+    ===================== */
+ 
+ export async function fetchPhotos(offset = 0, limit = 50) {
+-  const res = await fetch(
+-    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
+-  );
++  const url = API_BASE
++    ? `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
++    : `/api/photos?offset=${offset}&limit=${limit}`;
++
++  const res = await fetch(url);
+   if (!res.ok) {
+     throw new Error("Failed to fetch photos");
+   }
+@@ -52,7 +58,8 @@ export async function fetchPhotos(offset = 0, limit = 50) {
+    ===================== */
+ 
+ export async function fetchAlbums(): Promise<Album[]> {
+-  const res = await fetch(`${API_BASE}/api/albums`);
++  const url = API_BASE ? `${API_BASE}/api/albums` : `/api/albums`;
++  const res = await fetch(url);
+   if (!res.ok) return [];
+   return res.json();
+ }
+@@ -62,7 +69,8 @@ export async function fetchAlbums(): Promise<Album[]> {
+    ===================== */
+ 
+ export async function fetchPeople(): Promise<Person[]> {
+-  const res = await fetch(`${API_BASE}/api/people`);
++  const url = API_BASE ? `${API_BASE}/api/people` : `/api/people`;
++  const res = await fetch(url);
+   if (!res.ok) {
+     throw new Error("Failed to fetch people");
+   }
+@@ -70,18 +78,43 @@ export async function fetchPeople(): Promise<Person[]> {
+ }
+ 
+ export async function fetchPersonPhotos(personId: number) {
+-  const res = await fetch(`${API_BASE}/api/people/${personId}/photos`);
++  const url = API_BASE
++    ? `${API_BASE}/api/people/${personId}/photos`
++    : `/api/people/${personId}/photos`;
++
++  const res = await fetch(url);
+   if (!res.ok) {
+     throw new Error("Failed to fetch person photos");
+   }
+   return res.json();
+ }
+ 
++/* =====================
++   SEARCH
++   ===================== */
++
++export async function searchPhotos(query: string): Promise<Photo[]> {
++  const url = API_BASE
++    ? `${API_BASE}/api/search?q=${encodeURIComponent(query)}`
++    : `/api/search?q=${encodeURIComponent(query)}`;
++
++  const res = await fetch(url);
++  if (!res.ok) {
++    throw new Error("Search failed");
++  }
++  const data = await res.json();
++  return Array.isArray(data?.photos) ? data.photos : [];
++}
++
+ export async function fetchUnidentifiedCount(): Promise<{
+   photoCount: number;
+   faceCount: number;
+ }> {
+-  const res = await fetch(`${API_BASE}/api/people/unidentified`);
++  const url = API_BASE
++    ? `${API_BASE}/api/people/unidentified`
++    : `/api/people/unidentified`;
++
++  const res = await fetch(url);
+   if (!res.ok) {
+     throw new Error("Failed to fetch unidentified count");
+   }
+
+commit e9c415a919c10c774602ab5a19e43b919bc2c007
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sun Feb 8 22:08:19 2026 -0600
+
+    Add People view with drill-down and fix frontend for production
+    
+    - Add People grid view with person drill-down to see their photos
+    - Add Person type and API functions (fetchPeople, fetchPersonPhotos,
+      fetchUnidentifiedCount) to api.ts
+    - Restore VITE_API_BASE_URL env var instead of hardcoded localhost
+    - Restore infinite scroll (useInfinitePhotos + useIntersectionSentinel)
+      for the Photos view
+    - Remove hardcoded API_BASE from PeopleGrid, use thumbnail URLs directly
+      from API response
+    - Add person-detail and status views to Sidebar AppView type
+    - Simplify Sidebar layout and PeopleGrid card design
+    
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index 21d86c2..cd0683c 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -2,6 +2,10 @@
+ 
+ const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? "";
+ 
++/* =====================
++   TYPES
++   ===================== */
++
+ export interface Photo {
+   id: number;
+   filename: string;
+@@ -21,22 +25,65 @@ export interface Album {
+   updatedAt: string;
+ }
+ 
++export interface Person {
++  id: number;
++  name: string;
++  photoCount: number;
++  thumbnailUrl: string | null;
++}
++
++/* =====================
++   PHOTOS
++   ===================== */
++
+ export async function fetchPhotos(offset = 0, limit = 50) {
+   const res = await fetch(
+     `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
+   );
+-
+   if (!res.ok) {
+     throw new Error("Failed to fetch photos");
+   }
+-
+   const data = await res.json();
+   return data.photos ?? data;
+ }
+ 
++/* =====================
++   ALBUMS
++   ===================== */
++
+ export async function fetchAlbums(): Promise<Album[]> {
+   const res = await fetch(`${API_BASE}/api/albums`);
+   if (!res.ok) return [];
+-  const data = await res.json();
+-  return Array.isArray(data) ? data : data.albums ?? [];
++  return res.json();
++}
++
++/* =====================
++   PEOPLE
++   ===================== */
++
++export async function fetchPeople(): Promise<Person[]> {
++  const res = await fetch(`${API_BASE}/api/people`);
++  if (!res.ok) {
++    throw new Error("Failed to fetch people");
++  }
++  return res.json();
++}
++
++export async function fetchPersonPhotos(personId: number) {
++  const res = await fetch(`${API_BASE}/api/people/${personId}/photos`);
++  if (!res.ok) {
++    throw new Error("Failed to fetch person photos");
++  }
++  return res.json();
++}
++
++export async function fetchUnidentifiedCount(): Promise<{
++  photoCount: number;
++  faceCount: number;
++}> {
++  const res = await fetch(`${API_BASE}/api/people/unidentified`);
++  if (!res.ok) {
++    throw new Error("Failed to fetch unidentified count");
++  }
++  return res.json();
+ }
+
+commit 9429294eb2180f0a6f581bff565ca5dced3e4861
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 7 22:45:36 2026 -0600
+
+    Restore sidebar navigation with view routing
+    
+    Re-add Sidebar component to App.tsx with view state and album loading.
+    Add Album type and fetchAlbums to api.ts. Photos view and sidebar are
+    fully functional; other views show placeholder until their backend
+    endpoints are restored.
+    
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index c176281..21d86c2 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -7,6 +7,18 @@ export interface Photo {
+   filename: string;
+   thumbnail_url: string;
+   image_url: string;
++  [key: string]: any;
++}
++
++export interface Album {
++  id: number;
++  name: string;
++  description: string | null;
++  coverPhotoId: number | null;
++  coverPhotoUrl: string | null;
++  photoCount: number;
++  createdAt: string;
++  updatedAt: string;
+ }
+ 
+ export async function fetchPhotos(offset = 0, limit = 50) {
+@@ -21,3 +33,10 @@ export async function fetchPhotos(offset = 0, limit = 50) {
+   const data = await res.json();
+   return data.photos ?? data;
+ }
++
++export async function fetchAlbums(): Promise<Album[]> {
++  const res = await fetch(`${API_BASE}/api/albums`);
++  if (!res.ok) return [];
++  const data = await res.json();
++  return Array.isArray(data) ? data : data.albums ?? [];
++}
+
+commit b093a72471ea29c0ca430e11780ff3fcce1ac6b8
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 7 22:37:48 2026 -0600
+
+    Fix CORS error: remove credentials include from cross-origin fetch
+    
+    Browsers block responses with Access-Control-Allow-Origin: * when
+    credentials are included. Since auth uses Firebase tokens not cookies,
+    credentials: include is unnecessary.
+    
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index 91cae94..c176281 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -11,8 +11,7 @@ export interface Photo {
+ 
+ export async function fetchPhotos(offset = 0, limit = 50) {
+   const res = await fetch(
+-    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`,
+-    { credentials: "include" }
++    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`
+   );
+ 
+   if (!res.ok) {
+
+commit 00aadd8156b6ae26e99ae7869800c5b327d8c803
+Author: Brian <bmilhizerphotos@gmail.com>
+Date:   Sat Feb 7 22:23:05 2026 -0600
+
+    Fix blank screen in production: use VITE_API_BASE_URL for API calls
+    
+    fetchPhotos used a relative /api/photos path which in production hit
+    Firebase Hosting (returning HTML) instead of the API backend. Now uses
+    VITE_API_BASE_URL so requests go to api.milhizerfamilyphotos.org.
+    
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+diff --git a/frontend/src/api.ts b/frontend/src/api.ts
+index 8f80c2f..91cae94 100644
+--- a/frontend/src/api.ts
++++ b/frontend/src/api.ts
+@@ -1,5 +1,7 @@
+ // frontend/src/api.ts
+ 
++const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL ?? "";
++
+ export interface Photo {
+   id: number;
+   filename: string;
+@@ -9,7 +11,7 @@ export interface Photo {
+ 
+ export async function fetchPhotos(offset = 0, limit = 50) {
+   const res = await fetch(
+-    `/api/photos?offset=${offset}&limit=${limit}`,
++    `${API_BASE}/api/photos?offset=${offset}&limit=${limit}`,
+     { credentials: "include" }
+   );
+ 

@@ -1,0 +1,67 @@
+﻿e99e2bb fix: improve API timeout error messages for better user feedback
+e17d253 fix: add 10s timeout to all API calls and improve error handling for network failures
+deb2eaa fix: improve API error handling and add detailed error logging for all fetch operations
+4fc8d53 fix: improve fetchPersonPhotos to handle various API response formats and ensure consistent array return type
+d488c14 fix: add proper return type and data handling to fetchPersonPhotos function in frontend API
+ab9b742 feat: add health check endpoint to server.js
+0e6d270 feat: add missing AI search endpoint route
+5cbb8a3 fix: Use FTS table for search endpoint to properly support AI photo search functionality
+1ea52e7 fix: add missing API routes and proxy configuration for frontend backend integration
+83ba51f Add search endpoint and restore People routes in server.js
+4e2c58d Fix search results not rendering and add API_BASE to search fetch
+e9c415a Add People view with drill-down and fix frontend for production
+ac6e685 Fix full-image loading by adding HTTP Range request support
+96a9086 Add cloudflared tunnel to PM2 ecosystem config
+68f8bad Update CLAUDE.md with production deployment details and gotchas
+525761d Fix PM2 ecosystem config paths to match current repo location
+bd9c3a2 Fix photos not loading: use IntersectionObserver for initial fetch
+9429294 Restore sidebar navigation with view routing
+b093a72 Fix CORS error: remove credentials include from cross-origin fetch
+00aadd8 Fix blank screen in production: use VITE_API_BASE_URL for API calls
+ed7bf62 Fix Firebase deploy: correct public directory path in firebase.json
+9dd667b Fix modal not displaying full image in production
+1807eab Remove unused xserver.js
+1e618ca Add faceapi-models and thumb-cache to .gitignore
+eaf4d63 Refactor backend and frontend: simplify db layer, server, and components
+0d2f064 Add CLAUDE.md with project guidance for Claude Code
+7901846 Add duplicate detection and burst grouping feature
+8d20c2c Fix contentless FTS5 delete-all syntax
+d868133 Add deterministic confidence scoring for memories
+87914f4 Fix GROUP_CONCAT DISTINCT syntax for SQLite FTS rebuild
+4754460 Add FTS5 full-text search for memories
+808984b Add full memory regeneration pipeline with AI enrichment
+edcd790 Add memory edit modal with AI narrative generation
+f1b0a95 Add inline editing for memory title, narrative, location, and cover photo
+8aa01aa Add Memories feature with date/location clustering and Gemini narratives
+a69ec74 Add left/right arrow key navigation to ImageModal
+5a24854 Fix SQLite busy_timeout configuration
+626b368 Add .rooignore file
+f886292 Add database transaction support for bulk operations
+ed02b87 Fix album thumbnail URLs in production
+9f86477 Fix Firebase deployment target configuration
+54d0a43 Fix VITE_API_BASE_URL env variable name in CI workflow
+7e72222 Add sidebar navigation with full view structure
+094040d Add input validation, error handling, and performance improvements
+8c8eacf Add .claude/, models/, and test files to .gitignore
+0705e36 Add documentation, ops scripts, and test utilities
+1c8e7cf Add albums, face detection, AI tagging, and duplicate detection features
+64be87a Add People feature with photo metadata extraction
+41c7e38 Working state: thumbnails and full images load correctly
+54c6600 Fix thumbnail 401 errors and modal image loading
+f0701d4 Remove Cache-Control header from API requests
+0d02ae7 Fix CORS to allow Cache-Control header
+da681ac Fix full image not loading in modal on production
+70216fd Refactor codebase and fix medium/low priority issues
+e3a7295 Fix high priority security vulnerabilities in server.js
+a86b479 Add debug logging to troubleshoot photo loading issue
+d5f5de2 Temporarily bypass authentication to allow photos to load
+3dc82ef Add Firebase Hosting headers for popup-friendly authentication
+baf777a Make Vite config popup-friendly for Firebase authentication
+4bf1ae2 Implement robust redirect authentication for Firebase
+e56c6e7 Refactor App.tsx to use renderView() pattern with switch statement
+9f52a8d Improve redirect authentication UX with loading states
+8b13c2d Add redirect authentication fallback for Firebase popup blocks
+f65ed76 Fix Firebase authentication Cross-Origin-Opener-Policy issues
+6a6c320 Add Firebase authentication UI and state management
+97e0ffb Fix Firebase initialization error
+2214f07 Redesign frontend as Google Photos-style masonry gallery

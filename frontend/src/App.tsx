@@ -11,6 +11,7 @@ import {
   fetchMe,
   fetchPeopleSuggestions,
   confirmPeopleSuggestion,
+  rejectPeopleSuggestion,
   mergePeople,
   Photo,
   Album,
@@ -21,6 +22,7 @@ import {
   EMPTY_FILTERS,
   hasActiveFilters,
   PeopleSuggestion,
+  PeopleSuggestionMatch,
 } from "./api";
 import { useInfinitePhotos } from "./hooks/useInfinitePhotos";
 import { useIntersectionSentinel } from "./hooks/useIntersectionSentinel";
@@ -53,6 +55,7 @@ import PhotoEditor from "./components/PhotoEditor";
 import { MergeSuggestionBar } from "./components/MergeSuggestionBar";
 import { MergeReviewModal } from "./components/MergeReviewModal";
 import { MergePeopleModal } from "./components/MergePeopleModal";
+import { FaceExpandModal } from "./components/FaceExpandModal";
 import { useAuth } from "./hooks/useAuth";
 import { Memory } from "./api";
 
@@ -99,6 +102,7 @@ export default function App() {
   const [dismissedPersonIds, setDismissedPersonIds] = useState<Set<number>>(new Set());
   const [reviewSuggestion, setReviewSuggestion] = useState<PeopleSuggestion | null>(null);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  const [expandFace, setExpandFace] = useState<{ match: PeopleSuggestionMatch; personName: string } | null>(null);
 
   const [modalPhoto, setModalPhoto] = useState<Photo | null>(null);
   const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
@@ -205,6 +209,12 @@ export default function App() {
           : p
       )
     );
+  }, []);
+
+  const handleRejectSuggestion = useCallback(async (suggestion: PeopleSuggestion) => {
+    const faceIds = suggestion.matches.map((m) => m.faceId);
+    await rejectPeopleSuggestion(suggestion.person.id, faceIds);
+    setSuggestions((prev) => prev.filter((s) => s.person.id !== suggestion.person.id));
   }, []);
 
   const handleConfirmSelectedSuggestion = useCallback(async (personId: number, photoIds: number[]) => {
@@ -717,6 +727,8 @@ export default function App() {
             onConfirmAll={handleConfirmSuggestion}
             onReview={(s) => setReviewSuggestion(s)}
             onDismiss={(personId) => setDismissedPersonIds((prev) => new Set([...prev, personId]))}
+            onRejectAll={handleRejectSuggestion}
+            onExpand={(match, personName) => setExpandFace({ match, personName })}
           />
           <PeopleGrid
             people={people}
@@ -965,6 +977,16 @@ export default function App() {
           people={people}
           onMerge={handleMergePeople}
           onCancel={() => setShowMergeModal(false)}
+        />
+      )}
+
+      {/* Face expand modal (click thumbnail → full photo + bbox) */}
+      {expandFace && (
+        <FaceExpandModal
+          imageUrl={expandFace.match.thumbnailUrl.replace(/\/thumbnails\/(\d+)/, "/api/photos/$1/file")}
+          faceBbox={expandFace.match.faceBbox}
+          personName={expandFace.personName}
+          onClose={() => setExpandFace(null)}
         />
       )}
 

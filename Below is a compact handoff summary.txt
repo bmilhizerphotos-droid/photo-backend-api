@@ -1,0 +1,89 @@
+Below is a **compact handoff summary** you can paste directly into a new chat to re-establish full context quickly.
+
+---
+
+## Project Summary — Family Photos App
+
+### Objective
+
+Stabilize and deploy a self-hosted family photo gallery so that **thumbnails and full-size images load correctly in production**, matching localhost behavior after migrating to a new Windows 11 machine.
+
+---
+
+### Platform / Stack
+
+* **Backend:** Node.js (ESM) + Express, SQLite, Sharp
+* **Frontend:** React + Vite
+* **Auth:** Firebase Authentication (token-based, no cookies)
+* **Hosting:**
+
+  * Frontend: Firebase Hosting
+  * Backend: Local Node server exposed via **Cloudflare Tunnel**
+* **OS:** Windows 11
+* **Photos Storage:** External drive (`G:\Photos`)
+
+---
+
+### Actions Taken
+
+1. **Migrated project to new computer**
+
+   * Installed Node, npm, dependencies
+   * Verified backend and frontend work locally
+2. **Verified backend correctness**
+
+   * `/health`, `/api/photos`, `/api/photos/:id/file`, `/thumbnail` all return correctly
+3. **Restored original working `server.js`**
+
+   * Fixed broken local API routing caused by an incomplete modified server file
+4. **Installed and configured Cloudflare Tunnel**
+
+   * Logged in
+   * Reused existing tunnel
+   * Ran tunnel with token → backend reachable at `https://api.milhizerfamilyphotos.org`
+5. **Resolved production-only frontend bugs (via Claude)**
+
+   * Unwrapped API response (`{ photos }`) correctly in `api.ts`
+   * Fixed React Hooks violation in `ImageModal.tsx`
+   * Added explicit `VITE_API_BASE_URL` for production API calls
+   * Fixed Firebase Hosting `public` path
+   * Removed invalid `credentials: "include"` causing CORS conflicts
+   * Restored Sidebar + fixed initial photo loading logic
+6. **Validated end-to-end**
+
+   * Thumbnails load in prod
+   * Clicking thumbnail opens full image
+   * Direct full image URLs load in prod
+   * No console or network errors
+
+---
+
+### Potential Pitfalls / Gotchas
+
+* **API shape mismatches** (envelope vs array) can silently break UI
+* **Relative `/api/*` paths** work locally but fail in production without a base URL
+* **CORS rules**: `credentials: include` cannot be used with `Access-Control-Allow-Origin: *`
+* **React Hooks order violations** may only fail in production builds
+* **Firebase Hosting paths** depend on deploy working directory
+* **Cloudflare Tunnel must be running** independently of the backend
+* Local dev proxies can mask real production issues
+
+---
+
+### Current Status
+
+✅ **Fully working in production**
+
+* Backend reachable through Cloudflare Tunnel
+* Frontend deployed on Firebase Hosting
+* Thumbnails and full-size images load correctly
+* Modal opens images reliably
+* Localhost and production behavior are aligned
+
+---
+
+If you want, I can also generate:
+
+* A one-paragraph ultra-short version
+* A checklist-style handoff
+* A `DEPLOYMENT.md` or `RUNBOOK.md` version

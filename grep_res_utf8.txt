@@ -1,0 +1,2 @@
+﻿70216fd Refactor codebase and fix medium/low priority issues
+e3a7295 Fix high priority security vulnerabilities in server.js

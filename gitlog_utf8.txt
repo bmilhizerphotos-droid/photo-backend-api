@@ -1,0 +1,15 @@
+﻿e99e2bb fix: improve API timeout error messages for better user feedback
+e17d253 fix: add 10s timeout to all API calls and improve error handling for network failures
+deb2eaa fix: improve API error handling and add detailed error logging for all fetch operations
+4fc8d53 fix: improve fetchPersonPhotos to handle various API response formats and ensure consistent array return type
+d488c14 fix: add proper return type and data handling to fetchPersonPhotos function in frontend API
+ab9b742 feat: add health check endpoint to server.js
+0e6d270 feat: add missing AI search endpoint route
+5cbb8a3 fix: Use FTS table for search endpoint to properly support AI photo search functionality
+1ea52e7 fix: add missing API routes and proxy configuration for frontend backend integration
+83ba51f Add search endpoint and restore People routes in server.js
+4e2c58d Fix search results not rendering and add API_BASE to search fetch
+e9c415a Add People view with drill-down and fix frontend for production
+ac6e685 Fix full-image loading by adding HTTP Range request support
+96a9086 Add cloudflared tunnel to PM2 ecosystem config
+68f8bad Update CLAUDE.md with production deployment details and gotchas

@@ -1,0 +1,326 @@
+﻿diff --git a/server.js b/server.js
+index 457a3c0..b8825b1 100644
+--- a/server.js
++++ b/server.js
+@@ -2,7 +2,7 @@ import express from 'express';
+ import cors from 'cors';
+ import path from 'path';
+ import { fileURLToPath } from 'url';
+-import db from './db.js';
++import { db } from './db.js';
+ 
+ const __filename = fileURLToPath(import.meta.url);
+ const __dirname = path.dirname(__filename);
+@@ -10,164 +10,175 @@ const __dirname = path.dirname(__filename);
+ const app = express();
+ const PORT = process.env.PORT || 3001;
+ 
+-// Middleware
++// Persistent semantic service URL
++const SEMANTIC_URL = process.env.SEMANTIC_URL || 'http://127.0.0.1:8000';
++
+ app.use(cors());
+ app.use(express.json());
+ 
+-// Serve static files
+-app.use('/thumbnails', express.static(path.join(__dirname, 'thumbnails')));
++function parseIntOrDefault(v, d) {
++  const n = parseInt(v, 10);
++  return Number.isFinite(n) ? n : d;
++}
+ 
+-// API Routes
+-app.get('/api/search', async (req, res) => {
+-  try {
+-    const { q } = req.query;
+-    if (!q) {
+-      return res.status(400).json({ error: 'Query parameter "q" is required' });
+-    }
+-    
+-    // Use FTS table for better search performance
+-    const photos = await db.all(
+-      `SELECT id, filename, thumbnail_url, image_url FROM photos 
+-       WHERE id IN (SELECT docid FROM photo_search_fts WHERE photo_search_fts MATCH ?)
+-       ORDER BY created_at DESC`,
+-      [q]
+-    );
+-    
+-    res.json({ photos });
+-  } catch (error) {
+-    console.error('Search error:', error);
+-    res.status(500).json({ error: 'Internal server error' });
+-  }
+-});
++function groupPhotosWithPeople(photoRows, peopleRows) {
++  const peopleMap = new Map();
+ 
+-// Add missing people route
+-app.get('/api/people', async (req, res) => {
+-  try {
+-    const people = await db.all(`
+-      SELECT p.id, p.name, COUNT(f.photo_id) as photo_count, 
+-             (SELECT thumbnail_url FROM photos WHERE id = (
+-               SELECT photo_id FROM faces WHERE person_id = p.id LIMIT 1
+-             )) as thumbnail_url
+-      FROM people p
+-      LEFT JOIN faces f ON p.id = f.person_id
+-      GROUP BY p.id, p.name
+-      ORDER BY p.name
+-    `);
+-    
+-    res.json(people);
+-  } catch (error) {
+-    console.error('People error:', error);
+-    res.status(500).json({ error: 'Internal server error' });
++  for (const r of peopleRows) {
++    if (!peopleMap.has(r.photo_id)) peopleMap.set(r.photo_id, []);
++    if (r.person_name) peopleMap.get(r.photo_id).push(r.person_name);
+   }
+-});
+ 
+-// Add missing people/unidentified route
+-app.get('/api/people/unidentified', async (req, res) => {
+-  try {
+-    const photoCount = await db.get(`
+-      SELECT COUNT(*) as count FROM photos 
+-      WHERE id NOT IN (SELECT DISTINCT photo_id FROM faces)
+-    `);
+-    
+-    const faceCount = await db.get(`
+-      SELECT COUNT(*) as count FROM faces 
+-      WHERE person_id IS NULL
+-    `);
+-    
+-    res.json({
+-      photoCount: photoCount.count,
+-      faceCount: faceCount.count
+-    });
+-  } catch (error) {
+-    console.error('Unidentified error:', error);
+-    res.status(500).json({ error: 'Internal server error' });
+-  }
+-});
++  return photoRows.map((p) => ({
++    id: p.id,
++    filename: p.filename,
++    created_at: p.created_at,
++    thumbnail_url: `/api/photos/${p.id}/thumbnail`,
++    image_url: `/api/photos/${p.id}/file`,
++    people: peopleMap.get(p.id) || []
++  }));
++}
+ 
+-// Add photos route if missing
+-app.get('/api/photos', async (req, res) => {
+-  try {
+-    const offset = parseInt(req.query.offset) || 0;
+-    const limit = parseInt(req.query.limit) || 50;
+-    
+-    const photos = await db.all(`
+-      SELECT id, filename, thumbnail_url, image_url, created_at 
+-      FROM photos 
+-      ORDER BY created_at DESC 
+-      LIMIT ? OFFSET ?
+-    `, [limit, offset]);
+-    
+-    res.json({ photos });
+-  } catch (error) {
+-    console.error('Photos error:', error);
+-    res.status(500).json({ error: 'Internal server error' });
+-  }
+-});
++async function fetchPeopleForPhotoIds(photoIds) {
++  if (!photoIds || photoIds.length === 0) return [];
+ 
+-// Add photo thumbnail route if missing
+-app.get('/api/photos/:id/thumbnail', async (req, res) => {
+-  try {
+-    const { id } = req.params;
+-    const photo = await db.get('SELECT thumbnail_path FROM photos WHERE id = ?', [id]);
+-    
+-    if (!photo || !photo.thumbnail_path) {
+-      return res.status(404).json({ error: 'Thumbnail not found' });
+-    }
+-    
+-    res.sendFile(path.resolve(photo.thumbnail_path));
+-  } catch (error) {
+-    console.error('Thumbnail error:', error);
+-    res.status(500).json({ error: 'Internal server error' });
+-  }
+-});
++  const placeholders = photoIds.map(() => '?').join(',');
++  return db.all(
++    `
++    SELECT
++      pp.photo_id AS photo_id,
++      pe.name AS person_name
++    FROM photo_people pp
++    JOIN people pe ON pe.id = pp.person_id
++    WHERE pp.photo_id IN (${placeholders})
++    `,
++    photoIds
++  );
++}
+ 
+-// Add people photos route if missing
+-app.get('/api/people/:id/photos', async (req, res) => {
+-  try {
+-    const { id } = req.params;
+-    const photos = await db.all(`
+-      SELECT p.id, p.filename, p.thumbnail_url, p.image_url 
+-      FROM photos p
+-      JOIN faces f ON p.id = f.photo_id
+-      WHERE f.person_id = ?
+-      ORDER BY p.created_at DESC
+-    `, [id]);
+-    
+-    res.json({ photos });
+-  } catch (error) {
+-    console.error('People photos error:', error);
+-    res.status(500).json({ error: 'Internal server error' });
++async function searchPhotosWithFTS(q, limit, offset) {
++  return db.all(
++    `
++    SELECT
++      p.id,
++      p.filename,
++      p.created_at,
++      p.thumbnail_path,
++      p.full_path
++    FROM photo_search_fts
++    JOIN photos p ON p.id = photo_search_fts.rowid
++    WHERE photo_search_fts MATCH ?
++    ORDER BY p.created_at DESC
++    LIMIT ? OFFSET ?
++    `,
++    [q, limit, offset]
++  );
++}
++
++// NEW: Call persistent semantic service
++async function runSemanticSearch({ query, limit }) {
++  const url = new URL(`${SEMANTIC_URL}/search`);
++  url.searchParams.set('q', query);
++  url.searchParams.set('k', String(limit));
++
++  const response = await fetch(url.toString(), {
++    method: 'GET'
++  });
++
++  if (!response.ok) {
++    const text = await response.text().catch(() => '');
++    throw new Error(`Semantic service error: ${response.status} ${text}`);
+   }
+-});
+ 
+-// Add AI search route if missing
++  return response.json();
++}
++
+ app.get('/api/ai/search', async (req, res) => {
+   try {
+-    const { q } = req.query;
++    const q = (req.query.q || '').toString().trim();
++    const offset = parseIntOrDefault(req.query.offset, 0);
++    const limit = parseIntOrDefault(req.query.limit, 50);
++
+     if (!q) {
+-      return res.status(400).json({ error: 'Query parameter "q" is required' });
++      return res.json({ query: q, mode: 'empty', photos: [] });
++    }
++
++    // 1∩╕ÅΓâú FTS
++    const ftsRows = await searchPhotosWithFTS(q, limit, offset);
++
++    const combinedIds = new Set(ftsRows.map(r => r.id));
++    const combinedRows = [...ftsRows];
++
++    // 2∩╕ÅΓâú Semantic
++    const semanticNeed = Math.max(limit - combinedRows.length, 0);
++
++    if (semanticNeed > 0) {
++      try {
++        const semanticPayload = await runSemanticSearch({
++          query: q,
++          limit: Math.max(limit, 50)
++        });
++
++        const semanticIds = semanticPayload.results
++          .map(r => r.photo_id)
++          .filter(id => !combinedIds.has(id));
++
++        if (semanticIds.length > 0) {
++          const placeholders = semanticIds.map(() => '?').join(',');
++          const semanticRows = await db.all(
++            `
++            SELECT
++              p.id,
++              p.filename,
++              p.created_at,
++              p.thumbnail_path,
++              p.full_path
++            FROM photos p
++            WHERE p.id IN (${placeholders})
++            `,
++            semanticIds
++          );
++
++          const rowById = new Map(semanticRows.map(r => [r.id, r]));
++
++          for (const sid of semanticIds) {
++            const row = rowById.get(sid);
++            if (row) {
++              combinedIds.add(row.id);
++              combinedRows.push(row);
++            }
++          }
++        }
++      } catch (e) {
++        console.warn('Semantic service failed:', e.message);
++      }
+     }
+-    
+-    // Use FTS table for better search performance
+-    const photos = await db.all(
+-      `SELECT id, filename, thumbnail_url, image_url FROM photos 
+-       WHERE id IN (SELECT docid FROM photo_search_fts WHERE photo_search_fts MATCH ?)
+-       ORDER BY created_at DESC`,
+-      [q]
+-    );
+-    
+-    res.json({ photos });
++
++    // 3∩╕ÅΓâú People join
++    const photoIds = combinedRows.map(r => r.id);
++    const peopleRows = await fetchPeopleForPhotoIds(photoIds);
++    const photos = groupPhotosWithPeople(combinedRows, peopleRows);
++
++    const mode =
++      ftsRows.length > 0 && photos.length > ftsRows.length
++        ? 'hybrid'
++        : ftsRows.length > 0
++        ? 'fts'
++        : 'semantic';
++
++    res.json({
++      query: q,
++      mode,
++      count: photos.length,
++      photos
++    });
++
+   } catch (error) {
+-    console.error('AI Search error:', error);
++    console.error('AI search error:', error);
+     res.status(500).json({ error: 'Internal server error' });
+   }
+ });
+ 
+-// Health check endpoint
+-app.get('/api/health', (req, res) => {
+-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+-});
+-
+ app.listen(PORT, () => {
+   console.log(`Server running on http://localhost:${PORT}`);
+ });

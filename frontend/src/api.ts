@@ -1234,9 +1234,11 @@ export async function editSave(params: EditSaveParams): Promise<void> {
 // ── People Suggestions & Merge ──────────────────
 
 export interface PeopleSuggestionMatch {
+  faceId: number;
   photoId: number;
   confidence: number;
   thumbnailUrl: string;
+  faceBbox: { x: number; y: number; width: number; height: number };
 }
 
 export interface PeopleSuggestion {
@@ -1268,6 +1270,14 @@ export async function confirmPeopleSuggestion(personId: number, photoIds: number
   const res = await fetchWithAuth(`${API_BASE}/api/people/suggestions/confirm`, {
     method: "POST",
     body: JSON.stringify({ personId, photoIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function rejectPeopleSuggestion(personId: number, faceIds: number[]): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/api/people/suggestions/reject`, {
+    method: "POST",
+    body: JSON.stringify({ personId, faceIds }),
   });
   if (!res.ok) throw new Error(await res.text());
 }

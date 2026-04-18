@@ -148,6 +148,11 @@ async function runMigrations() {
     added_at  TEXT DEFAULT (datetime('now')),
     PRIMARY KEY (album_id, photo_id)
   )`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS face_suggestion_rejections (
+    person_id INTEGER NOT NULL,
+    face_id   INTEGER NOT NULL,
+    PRIMARY KEY (person_id, face_id)
+  )`);
 }
 
 // ---------------- AUTHENTICATION MIDDLEWARE ----------------
@@ -1472,7 +1477,7 @@ function writePersonMetadata(filePath, personName) {
 // GET /api/people/suggestions — cosine-similarity face suggestions
 app.get("/api/people/suggestions", authenticateToken, async (req, res) => {
   try {
-    const THRESHOLD = 0.45;
+    const THRESHOLD = 0.90;
     const MAX_SAMPLES = 100;  // embeddings sampled per person for centroid
     const MAX_UNID = 2000;    // unidentified photos to compare
 
@@ -1494,29 +1499,49 @@ app.get("/api/people/suggestions", authenticateToken, async (req, res) => {
 
     if (!centroids.length) return res.json({ suggestions: [] });
 
-    // One best face embedding per unidentified photo (highest confidence)
-    const unidRows = await dbAll(`
-      SELECT fe.photo_id, fe.embedding, fe.confidence
+    // Load all rejections to skip during comparison
+    const rejRows = await dbAll(`SELECT person_id, face_id FROM face_suggestion_rejections`);
+    const rejectedSet = new Set(rejRows.map(r => `${r.person_id}:${r.face_id}`));
+
+    // All unidentified faces (multiple per photo OK here; we'll pick best per photo in JS)
+    const allUnidRows = await dbAll(`
+      SELECT fe.id as face_id, fe.photo_id, fe.embedding, fe.confidence,
+             fe.bbox_x, fe.bbox_y, fe.bbox_width, fe.bbox_height
       FROM face_embeddings fe
       WHERE fe.photo_id NOT IN (SELECT DISTINCT photo_id FROM photo_people)
-      GROUP BY fe.photo_id
-      HAVING fe.confidence = MAX(fe.confidence)
       ORDER BY fe.confidence DESC
       LIMIT ?
-    `, [MAX_UNID]);
+    `, [MAX_UNID * 4]);
+
+    // Diversity check: keep only the best-confidence face per photo
+    const seenPhotos = new Set();
+    const unidRows = [];
+    for (const row of allUnidRows) {
+      if (!seenPhotos.has(row.photo_id)) {
+        seenPhotos.add(row.photo_id);
+        unidRows.push(row);
+        if (unidRows.length >= MAX_UNID) break;
+      }
+    }
 
     // Compare each unidentified face against person centroids
-    const personMatches = new Map(); // personId → [{photoId, confidence}]
+    const personMatches = new Map(); // personId → [{faceId, photoId, confidence, faceBbox}]
     for (const row of unidRows) {
       const emb = blobToF32(row.embedding);
       let bestSim = THRESHOLD, bestPerson = null;
       for (const { person, centroid } of centroids) {
+        if (rejectedSet.has(`${person.id}:${row.face_id}`)) continue;
         const sim = cosineSim(emb, centroid);
         if (sim > bestSim) { bestSim = sim; bestPerson = person; }
       }
       if (!bestPerson) continue;
       if (!personMatches.has(bestPerson.id)) personMatches.set(bestPerson.id, []);
-      personMatches.get(bestPerson.id).push({ photoId: row.photo_id, confidence: +bestSim.toFixed(3) });
+      personMatches.get(bestPerson.id).push({
+        faceId: row.face_id,
+        photoId: row.photo_id,
+        confidence: +bestSim.toFixed(3),
+        faceBbox: { x: row.bbox_x, y: row.bbox_y, width: row.bbox_width, height: row.bbox_height },
+      });
     }
 
     const suggestions = [];
@@ -1527,8 +1552,8 @@ app.get("/api/people/suggestions", authenticateToken, async (req, res) => {
       suggestions.push({
         person: { id: person.id, name: person.name, photoCount: person.photo_count },
         matches: sorted.slice(0, 20).map(m => ({
-          photoId: m.photoId, confidence: m.confidence,
-          thumbnailUrl: `/thumbnails/${m.photoId}`,
+          faceId: m.faceId, photoId: m.photoId, confidence: m.confidence,
+          faceBbox: m.faceBbox, thumbnailUrl: `/thumbnails/${m.photoId}`,
         })),
         totalCount: sorted.length,
       });
@@ -1568,6 +1593,25 @@ app.post("/api/people/suggestions/confirm", authenticateToken, async (req, res) 
   } catch (err) {
     console.error("POST /api/people/suggestions/confirm error:", err);
     res.status(500).json({ error: "Failed to confirm suggestion" });
+  }
+});
+
+// POST /api/people/suggestions/reject — permanently exclude face IDs from a person's cluster
+app.post("/api/people/suggestions/reject", authenticateToken, async (req, res) => {
+  const { personId, faceIds } = req.body;
+  if (!personId || !Array.isArray(faceIds) || !faceIds.length)
+    return res.status(400).json({ error: "Invalid personId or faceIds" });
+  try {
+    for (const faceId of faceIds) {
+      await dbRun(
+        "INSERT OR IGNORE INTO face_suggestion_rejections (person_id, face_id) VALUES (?, ?)",
+        [personId, faceId]
+      );
+    }
+    res.json({ success: true, rejected: faceIds.length });
+  } catch (err) {
+    console.error("POST /api/people/suggestions/reject error:", err);
+    res.status(500).json({ error: "Failed to reject suggestions" });
   }
 });
 

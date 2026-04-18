@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import type { PeopleSuggestion } from "../api";
+import type { PeopleSuggestion, PeopleSuggestionMatch } from "../api";
 
 interface Props {
   suggestions: PeopleSuggestion[];
@@ -7,10 +7,21 @@ interface Props {
   onConfirmAll: (suggestion: PeopleSuggestion) => Promise<void>;
   onReview: (suggestion: PeopleSuggestion) => void;
   onDismiss: (personId: number) => void;
+  onRejectAll: (suggestion: PeopleSuggestion) => Promise<void>;
+  onExpand: (match: PeopleSuggestionMatch, personName: string) => void;
 }
 
-export function MergeSuggestionBar({ suggestions, loading, onConfirmAll, onReview, onDismiss }: Props) {
+export function MergeSuggestionBar({
+  suggestions,
+  loading,
+  onConfirmAll,
+  onReview,
+  onDismiss,
+  onRejectAll,
+  onExpand,
+}: Props) {
   const [confirming, setConfirming] = useState<number | null>(null);
+  const [rejecting, setRejecting] = useState<number | null>(null);
 
   if (loading) {
     return (
@@ -32,6 +43,15 @@ export function MergeSuggestionBar({ suggestions, loading, onConfirmAll, onRevie
     }
   };
 
+  const handleRejectAll = async (suggestion: PeopleSuggestion) => {
+    setRejecting(suggestion.person.id);
+    try {
+      await onRejectAll(suggestion);
+    } finally {
+      setRejecting(null);
+    }
+  };
+
   return (
     <div className="mb-5">
       <div className="flex items-center gap-2 mb-2">
@@ -46,15 +66,21 @@ export function MergeSuggestionBar({ suggestions, loading, onConfirmAll, onRevie
             key={s.person.id}
             className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5"
           >
-            {/* Thumbnail strip */}
+            {/* Clickable thumbnail strip */}
             <div className="flex gap-1 shrink-0">
               {s.matches.slice(0, 4).map((m) => (
-                <img
-                  key={m.photoId}
-                  src={m.thumbnailUrl}
-                  alt=""
-                  className="w-9 h-9 rounded-md object-cover border border-amber-300"
-                />
+                <button
+                  key={m.faceId}
+                  onClick={() => onExpand(m, s.person.name)}
+                  className="w-9 h-9 rounded-md overflow-hidden border border-amber-300 hover:border-amber-500 hover:ring-2 hover:ring-amber-300 transition-all focus:outline-none"
+                  title="Click to view full photo"
+                >
+                  <img
+                    src={m.thumbnailUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                </button>
               ))}
             </div>
 
@@ -79,15 +105,23 @@ export function MergeSuggestionBar({ suggestions, loading, onConfirmAll, onRevie
               </button>
               <button
                 onClick={() => handleConfirmAll(s)}
-                disabled={confirming === s.person.id}
+                disabled={confirming === s.person.id || rejecting === s.person.id}
                 className="px-3 py-1 text-xs font-medium rounded-full bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 transition-colors"
               >
                 {confirming === s.person.id ? "Saving…" : "Confirm All"}
               </button>
               <button
+                onClick={() => handleRejectAll(s)}
+                disabled={confirming === s.person.id || rejecting === s.person.id}
+                className="px-3 py-1 text-xs font-medium rounded-full border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+                title={`Not ${s.person.name} — don't show these again`}
+              >
+                {rejecting === s.person.id ? "Rejecting…" : "Reject All"}
+              </button>
+              <button
                 onClick={() => onDismiss(s.person.id)}
                 className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                title="Dismiss"
+                title="Dismiss for this session"
               >
                 ✕
               </button>
