@@ -974,6 +974,58 @@ async function searchByDateRange(dateRange, limit) {
   );
 }
 
+// True strict-AND search: every token must appear in at least one metadata field
+// (people.name, photo_captions.caption, photo_captions.keywords, photos.filename, or tags.name).
+// This replaces all OR-union logic — zero fallbacks, zero OR across tokens.
+async function searchStrictAnd(tokens, dateRange, limit) {
+  if ((!tokens || tokens.length === 0) && !dateRange) return [];
+
+  const conditions = ['p.is_deleted = 0'];
+  const params = [];
+
+  // Date range is an AND condition (inclusive)
+  if (dateRange) {
+    conditions.push(`COALESCE(p.date_taken, p.created_at) BETWEEN ? AND ?`);
+    params.push(dateRange.start, (dateRange.end || dateRange.start) + ' 23:59:59');
+  }
+
+  // One sub-clause per token — OR across fields, AND across tokens
+  for (const token of (tokens || [])) {
+    const like = `%${token}%`;
+    conditions.push(`(
+      EXISTS (
+        SELECT 1 FROM photo_people pp
+        JOIN people pe ON pe.id = pp.person_id
+        WHERE pp.photo_id = p.id AND pe.name LIKE ?
+      )
+      OR pc.caption  LIKE ?
+      OR pc.keywords LIKE ?
+      OR p.filename  LIKE ?
+      OR EXISTS (
+        SELECT 1 FROM photo_tags pt
+        JOIN tags t ON t.id = pt.tag_id
+        WHERE pt.photo_id = p.id AND t.name LIKE ?
+      )
+    )`);
+    params.push(like, like, like, like, like);
+  }
+
+  try {
+    return await dbAll(
+      `SELECT DISTINCT p.id, p.filename, p.created_at, p.date_taken, p.thumbnail_path, p.full_path
+       FROM photos p
+       LEFT JOIN photo_captions pc ON pc.photo_id = p.id
+       WHERE ${conditions.join('\n  AND ')}
+       ORDER BY COALESCE(p.date_taken, p.created_at) DESC
+       LIMIT ?`,
+      [...params, limit]
+    );
+  } catch (e) {
+    console.warn('searchStrictAnd error:', e.message);
+    return [];
+  }
+}
+
 async function runSemanticSearch(query, limit) {
   const url = new URL(`${SEMANTIC_URL}/search`);
   url.searchParams.set('q', query);
@@ -1126,66 +1178,47 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       return res.json({ query: '', mode: 'filter', count: photos.length, offset, limit, hasMore, photos, meta: {} });
     }
 
-    // Gemini expansion, local date parsing, and DB person lookup in parallel
-    const [gemini, localDateRange, dbPerson] = await Promise.all([
-      expandQueryWithGemini(q),
-      Promise.resolve(parseDateFromQuery(q)),
-      lookupPersonInDb(q)
+    // Tokenize: split into words, strip punctuation, remove stop words and single-char tokens
+    const STOP_WORDS = new Set([
+      'the','a','an','of','in','at','on','is','are','was','were','for','with',
+      'by','to','and','or','not','my','me','us','i','its','it','this','that',
+      'these','those','be','have','has','had','do','did','will','would','can',
+      'could','but','so','if','then','from','about','up','out','when','who'
     ]);
+    const allTokens = [...new Set(
+      q.toLowerCase()
+        .split(/\s+/)
+        .map(t => t.replace(/[^a-z0-9]/g, ''))
+        .filter(t => t.length > 1 && !STOP_WORDS.has(t))
+    )];
 
-    const concepts   = gemini?.concepts?.length ? gemini.concepts  : [q];
-    const tagTerms   = gemini?.tagTerms?.length ? gemini.tagTerms  : concepts.slice(0, 4);
-    const personName = gemini?.personName        || dbPerson || null;
-    const dateRange  = gemini?.dateRange         || localDateRange;
-    // Split the raw query into individual words for FTS AND logic.
-    const ftsTerms   = [...new Set(q.toLowerCase().split(/\s+/).filter(t => t.length > 1))];
+    // Parse date range locally (no Gemini needed)
+    const dateRange = parseDateFromQuery(q);
 
-    // Context keywords: query words that are NOT part of the detected person name.
-    // Used for strict AND mode — "haley beach" → contextKeywords=["beach"]
-    const personNameWords = personName ? personName.toLowerCase().split(/\s+/) : [];
-    const contextKeywords = ftsTerms.filter(t =>
+    // Remove date-like tokens (years, month names) from text search — they're handled by dateRange
+    const MONTH_WORDS = new Set([
+      'january','february','march','april','may','june','july','august',
+      'september','october','november','december',
+      'jan','feb','mar','apr','jun','jul','aug','sep','oct','nov','dec'
+    ]);
+    const textTokens = allTokens.filter(t =>
+      !/^(19|20)\d{2}$/.test(t) && !MONTH_WORDS.has(t)
+    );
+
+    // Local DB person lookup — for chip display only, not used in SQL
+    const dbPerson = await lookupPersonInDb(q);
+    const personNameWords = dbPerson ? dbPerson.toLowerCase().split(/\s+/) : [];
+    // contextKeywords = text tokens that aren't part of the detected person name
+    const contextKeywords = textTokens.filter(t =>
       !personNameWords.some(pw => pw.includes(t) || t.includes(pw))
     );
-    // Strict mode: person detected + at least one non-person keyword → must satisfy both
-    const strictPersonContext = !!personName && contextKeywords.length > 0;
 
-    console.log(`🔍 Search "${q}" offset=${offset} → person:${personName} strict:${strictPersonContext} context:[${contextKeywords.join(',')}] date:${JSON.stringify(dateRange)}`);
+    console.log(`🔍 Strict-AND "${q}" offset=${offset} tokens:[${textTokens.join(',')}] date:${JSON.stringify(dateRange)} person:${dbPerson}`);
 
-    // All sources in parallel — fetch innerLimit so pagination works.
-    // In strict mode: use searchPersonAndContext (true AND) and skip broad personRows.
-    const [strictRows, personRows, ftsRows, tagRows, dateRows] = await Promise.all([
-      strictPersonContext
-        ? searchPersonAndContext(personName, contextKeywords, innerLimit)
-        : Promise.resolve([]),
-      !strictPersonContext && personName
-        ? searchByPerson(personName, innerLimit)
-        : Promise.resolve([]),
-      searchFTS(strictPersonContext ? contextKeywords : ftsTerms, innerLimit),
-      searchByTags(tagTerms, innerLimit),
-      dateRange ? searchByDateRange(dateRange, innerLimit) : Promise.resolve([]),
-    ]);
+    // Single strict-AND SQL: every token must appear in ≥1 metadata field per photo
+    const combined = await searchStrictAnd(textTokens, dateRange, innerLimit);
 
-    // Semantic search — optional
-    let semanticRows = [];
-    try {
-      const payload = await runSemanticSearch(q, innerLimit);
-      const ids = (payload.results || []).map(r => r.photo_id);
-      if (ids.length > 0) {
-        const ph = ids.map(() => '?').join(',');
-        const rows = await dbAll(`SELECT id, filename, created_at, date_taken FROM photos WHERE id IN (${ph}) AND is_deleted = 0`, ids);
-        const byId = new Map(rows.map(r => [r.id, r]));
-        semanticRows = ids.map(id => byId.get(id)).filter(Boolean);
-      }
-    } catch { /* optional */ }
-
-    // Merge results.
-    // Strict mode (person + context): strict intersection first, then FTS fallback.
-    // Normal mode: person first, then date/fts/tags/semantic.
-    const combined = strictPersonContext
-      ? mergeResults([strictRows, ftsRows, dateRows, semanticRows], innerLimit)
-      : mergeResults([personRows, dateRows, ftsRows, tagRows, semanticRows], innerLimit);
-
-    // When filters are also active, post-filter the merged results
+    // Apply sidebar filter params (people/tags/date pickers) as a post-filter
     let finalCombined = combined;
     if (hasFilters) {
       const { clause, params } = buildFilterClause(filterPeople, filterTags, filterDateFrom, filterDateTo);
@@ -1194,34 +1227,26 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       finalCombined = combined.filter(r => filterIdSet.has(r.id));
     }
 
-    const hasMore   = finalCombined.length > offset + limit;
-    const page      = finalCombined.slice(offset, offset + limit);
+    const hasMore = finalCombined.length > offset + limit;
+    const page    = finalCombined.slice(offset, offset + limit);
 
     const peopleRows = await fetchPeopleForPhotoIds(page.map(r => r.id));
     const photos = buildPhotoResponse(page, peopleRows, base);
 
-    const sources = [];
-    if (strictRows.length > 0)    sources.push('person+context');
-    if (personRows.length > 0)    sources.push('person');
-    if (dateRows.length > 0)      sources.push('date');
-    if (ftsRows.length > 0)       sources.push('fts');
-    if (tagRows.length > 0)       sources.push('tags');
-    if (semanticRows.length > 0)  sources.push('semantic');
-
     res.json({
       query: q,
-      mode: sources.join('+') || 'no-results',
+      mode: 'strict-and',
       count: photos.length,
       offset,
       limit,
       hasMore,
       photos,
       meta: {
-        personName,
-        contextKeywords: strictPersonContext ? contextKeywords : [],
+        personName: dbPerson,
+        contextKeywords,
         dateRange,
-        concepts,
-        sources: { strict: strictRows.length, person: personRows.length, date: dateRows.length, fts: ftsRows.length, tags: tagRows.length, semantic: semanticRows.length }
+        concepts: textTokens,
+        sources: { strict: combined.length, person: 0, date: 0, fts: 0, tags: 0, semantic: 0 }
       }
     });
   } catch (error) {
