@@ -29,7 +29,8 @@ import { useIntersectionSentinel } from "./hooks/useIntersectionSentinel";
 
 import { PhotoMasonry } from "./components/PhotoMasonry";
 import { PeopleGrid } from "./components/PeopleGrid";
-import Sidebar, { AppView } from "./components/Sidebar";
+import Sidebar, { AppView, VIEW_PATHS } from "./components/Sidebar";
+import { useNavigate, useLocation } from "react-router-dom";
 import { ImageModal } from "./components/ImageModal";
 import { FaceTagModal } from "./components/FaceTagModal";
 import { UnidentifiedFaces } from "./components/UnidentifiedFaces";
@@ -62,9 +63,38 @@ import SearchView from "./components/SearchView";
 
 const ADMIN_EMAIL = "bmilhizerphotos@gmail.com";
 
+function pathToView(pathname: string): AppView {
+  if (pathname.startsWith("/people/unidentified")) return "unidentified";
+  if (pathname.startsWith("/people/")) return "people";
+  if (pathname.startsWith("/albums/")) return "albums";
+  const map: Record<string, AppView> = {
+    "/photos": "photos",
+    "/search": "search",
+    "/on-this-day": "on-this-day",
+    "/memories": "memories",
+    "/albums": "albums",
+    "/documents": "documents",
+    "/screenshots": "screenshots",
+    "/favorites": "favorites",
+    "/people": "people",
+    "/map": "map",
+    "/places": "places",
+    "/videos": "videos",
+    "/recently-added": "recently-added",
+    "/shared": "shared",
+    "/import": "import",
+    "/trash": "trash",
+    "/duplicates": "duplicates",
+    "/admin": "admin",
+  };
+  return map[pathname] ?? "photos";
+}
+
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { user, loading: authLoading, signingIn, error: authError, signIn, signOut } = useAuth();
-  const [view, setView] = useState<AppView>("photos");
+  const [view, setView] = useState<AppView>(() => pathToView(window.location.pathname));
   const [isApproved, setIsApproved] = useState<boolean | null>(null); // null=checking, false=denied, true=approved
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -147,8 +177,13 @@ export default function App() {
 
   // Submit search (called by form onSubmit and search button)
   const submitSearch = useCallback(() => {
-    setSearchQuery(searchInput.trim());
-  }, [searchInput]);
+    const q = searchInput.trim();
+    setSearchQuery(q);
+    if (q) {
+      setView("search");
+      navigate(`/search?q=${encodeURIComponent(q)}`);
+    }
+  }, [searchInput, navigate]);
 
   // Remove a single term from the search query (used by chip × buttons)
   const removeTerm = useCallback((term: string) => {
@@ -161,7 +196,19 @@ export default function App() {
     setSearchQuery(updated);
   }, [searchInput]);
 
-  const searching = view === "photos" && (searchQuery.trim().length > 0 || hasActiveFilters(filters));
+  // Sync view state when browser back/forward changes the URL
+  useEffect(() => {
+    const v = pathToView(location.pathname);
+    setView(v);
+    if (v === "search") {
+      const params = new URLSearchParams(location.search);
+      const q = params.get("q") ?? "";
+      setSearchInput(q);
+      setSearchQuery(q);
+    }
+  }, [location.pathname, location.search]);
+
+  const searching = (view === "search") || (view === "photos" && hasActiveFilters(filters));
 
   const sentinelRef = useIntersectionSentinel({
     enabled: !!user && isApproved === true && view === "photos" && !searching && hasMore && !photosLoading,
@@ -437,12 +484,13 @@ export default function App() {
       albumPhotosHasMoreRef.current = data.hasMore;
       setAlbumPhotosHasMore(data.hasMore);
       setView("album-detail");
+      navigate(`/albums/${albumId}`);
     } catch {
       setAlbumPhotos([]);
     } finally {
       setAlbumPhotosLoading(false);
     }
-  }, []);
+  }, [navigate]);
 
   const loadMoreAlbumPhotos = useCallback(async () => {
     if (albumPhotosInFlight.current || !albumPhotosHasMoreRef.current || !activeAlbum) return;
@@ -460,6 +508,7 @@ export default function App() {
   const loadPerson = useCallback(async (person: Person) => {
     setActivePerson(person);
     setView("person-detail");
+    navigate(`/people/${person.id}`);
 
     setPersonPhotos([]);
     setPersonPhotosLoading(true);
@@ -472,7 +521,7 @@ export default function App() {
     } finally {
       setPersonPhotosLoading(false);
     }
-  }, []);
+  }, [navigate]);
 
   const header = useMemo(() => {
     if (view === "person-detail" && activePerson) {
@@ -484,7 +533,7 @@ export default function App() {
             onClick={() => {
               setActivePerson(null);
               setPersonPhotos([]);
-              setView("people");
+              navigate(-1);
             }}
           >
             ← Back to People
@@ -497,7 +546,7 @@ export default function App() {
       );
     }
 
-    if (view === "photos") {
+    if (view === "photos" || view === "search") {
       const activeFilterCount = filters.people.length + filters.tags.length + (filters.dateFrom ? 1 : 0) + (filters.dateTo ? 1 : 0);
       return (
         <div className="mb-4 flex flex-col gap-2">
@@ -515,7 +564,7 @@ export default function App() {
             {searchInput.trim() && (
               <button
                 type="button"
-                onClick={() => { setSearchInput(""); setSearchQuery(""); }}
+                onClick={() => { setSearchInput(""); setSearchQuery(""); setView("photos"); navigate("/photos"); }}
                 className="px-3 py-2 text-gray-400 hover:text-gray-600 text-lg leading-none"
                 title="Clear"
               >
@@ -596,9 +645,25 @@ export default function App() {
     }
 
     return null;
-  }, [view, activePerson, searchInput, submitSearch, showFilters, filters, filterOptions, selectMode, selectedIds, setShowMergeModal]);
+  }, [view, activePerson, searchInput, submitSearch, showFilters, filters, filterOptions, selectMode, selectedIds, setShowMergeModal, navigate]);
 
   const renderView = () => {
+    if (view === "search") {
+      return (
+        <SearchView
+          query={searchQuery}
+          meta={searchMeta}
+          results={searchResults}
+          loading={searchLoading}
+          loadingMore={searchLoadingMore}
+          hasMore={searchHasMore}
+          sentinelRef={searchSentinelRef}
+          onPhotoClick={(p) => openPhoto(p)}
+          onRemoveTerm={removeTerm}
+        />
+      );
+    }
+
     if (view === "photos") {
       if (searching) {
         return (
@@ -662,7 +727,7 @@ export default function App() {
             <button
               type="button"
               className="text-sm text-blue-600 hover:underline"
-              onClick={() => { setActiveAlbum(null); setAlbumPhotos([]); setView("albums"); }}
+              onClick={() => { setActiveAlbum(null); setAlbumPhotos([]); navigate(-1); }}
             >
               ← Back to Albums
             </button>
@@ -713,7 +778,7 @@ export default function App() {
           <PeopleGrid
             people={people}
             onPersonClick={loadPerson}
-            onUnidentifiedClick={() => setView("unidentified")}
+            onUnidentifiedClick={() => { setView("unidentified"); navigate("/people/unidentified"); }}
             loading={peopleLoading}
           />
         </>
@@ -723,7 +788,7 @@ export default function App() {
     if (view === "unidentified") {
       return (
         <UnidentifiedFaces
-          onBack={() => setView("people")}
+          onBack={() => navigate(-1)}
         />
       );
     }
@@ -861,7 +926,7 @@ export default function App() {
             setActiveAlbum(null);
             setAlbumPhotos([]);
           }
-          if (v !== "photos") {
+          if (v !== "photos" && v !== "search") {
             setSearchInput("");
             setSearchQuery("");
             setFilters(EMPTY_FILTERS);
@@ -870,6 +935,7 @@ export default function App() {
           setSelectedIds(new Set());
           setSelectModeActive(false);
           setView(v);
+          navigate(VIEW_PATHS[v] ?? "/photos");
         }}
         albums={albums}
         selectedAlbumId={activeAlbum?.id ?? null}

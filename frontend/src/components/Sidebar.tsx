@@ -1,8 +1,10 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { Album } from "../api";
 
 export type AppView =
   | "photos"
+  | "search"
   | "on-this-day"
   | "memories"
   | "memory-detail"
@@ -25,6 +27,29 @@ export type AppView =
   | "status"
   | "admin";
 
+/** Maps every AppView to its canonical URL path */
+export const VIEW_PATHS: Partial<Record<AppView, string>> = {
+  photos:           "/photos",
+  search:           "/search",
+  "on-this-day":    "/on-this-day",
+  memories:         "/memories",
+  albums:           "/albums",
+  documents:        "/documents",
+  screenshots:      "/screenshots",
+  favorites:        "/favorites",
+  people:           "/people",
+  unidentified:     "/people/unidentified",
+  map:              "/map",
+  places:           "/places",
+  videos:           "/videos",
+  "recently-added": "/recently-added",
+  shared:           "/shared",
+  import:           "/import",
+  trash:            "/trash",
+  duplicates:       "/duplicates",
+  admin:            "/admin",
+};
+
 interface SidebarProps {
   view: AppView;
   onChangeView: (v: AppView) => void;
@@ -39,15 +64,18 @@ function NavItem({
   label,
   icon,
   active,
+  to,
   onClick,
 }: {
   label: string;
   icon: React.ReactNode;
   active: boolean;
-  onClick: () => void;
+  to: string;
+  onClick?: () => void;
 }) {
   return (
-    <button
+    <Link
+      to={to}
       onClick={onClick}
       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left text-sm transition-colors ${
         active
@@ -59,7 +87,7 @@ function NavItem({
         {icon}
       </span>
       <span className="flex-1">{label}</span>
-    </button>
+    </Link>
   );
 }
 
@@ -90,26 +118,52 @@ const DuplicatesIcon    = () => <Icon d={["M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-
 const AdminIcon         = () => <Icon d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />;
 const OnThisDayIcon     = () => <Icon d={["M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"]} />;
 
-const NAV_ITEMS: { id: AppView; label: string; icon: React.ReactNode }[] = [
-  { id: "photos",         label: "Photos",                  icon: <PhotosIcon /> },
-  { id: "on-this-day",    label: "On This Day",             icon: <OnThisDayIcon /> },
-  { id: "memories",       label: "Memories",                icon: <MemoriesIcon /> },
-  { id: "albums",         label: "Albums",                  icon: <AlbumsIcon /> },
-  { id: "documents",      label: "Documents",               icon: <DocumentsIcon /> },
-  { id: "screenshots",    label: "Screenshots",             icon: <ScreenshotsIcon /> },
-  { id: "favorites",      label: "Favorites",               icon: <FavoritesIcon /> },
-  { id: "people",         label: "People & pets",           icon: <PeopleIcon /> },
-  { id: "map",            label: "Map",                     icon: <MapIcon /> },
-  { id: "places",         label: "Places",                  icon: <PlacesIcon /> },
-  { id: "videos",         label: "Videos",                  icon: <VideosIcon /> },
-  { id: "recently-added", label: "Recently added",          icon: <RecentIcon /> },
-  { id: "shared",         label: "Shared",                  icon: <SharedIcon /> },
-  { id: "import",         label: "Add",                     icon: <ImportIcon /> },
-  { id: "trash",          label: "Trash",                   icon: <TrashIcon /> },
-  { id: "duplicates",    label: "Duplicates",              icon: <DuplicatesIcon /> },
+interface NavItemConfig {
+  id: AppView;
+  label: string;
+  icon: React.ReactNode;
+}
+
+const NAV_ITEMS: NavItemConfig[] = [
+  { id: "photos",           label: "Photos",          icon: <PhotosIcon /> },
+  { id: "on-this-day",      label: "On This Day",     icon: <OnThisDayIcon /> },
+  { id: "memories",         label: "Memories",        icon: <MemoriesIcon /> },
+  { id: "albums",           label: "Albums",          icon: <AlbumsIcon /> },
+  { id: "documents",        label: "Documents",       icon: <DocumentsIcon /> },
+  { id: "screenshots",      label: "Screenshots",     icon: <ScreenshotsIcon /> },
+  { id: "favorites",        label: "Favorites",       icon: <FavoritesIcon /> },
+  { id: "people",           label: "People & pets",   icon: <PeopleIcon /> },
+  { id: "map",              label: "Map",             icon: <MapIcon /> },
+  { id: "places",           label: "Places",          icon: <PlacesIcon /> },
+  { id: "videos",           label: "Videos",          icon: <VideosIcon /> },
+  { id: "recently-added",   label: "Recently added",  icon: <RecentIcon /> },
+  { id: "shared",           label: "Shared",          icon: <SharedIcon /> },
+  { id: "import",           label: "Add",             icon: <ImportIcon /> },
+  { id: "trash",            label: "Trash",           icon: <TrashIcon /> },
+  { id: "duplicates",       label: "Duplicates",      icon: <DuplicatesIcon /> },
 ];
 
-export default function Sidebar({ view, onChangeView, isAdmin }: SidebarProps) {
+/** Which top-level sidebar item is "active" for a given view. */
+function activeNavId(view: AppView): AppView {
+  if (view === "person-detail") return "people";
+  if (view === "unidentified")  return "people";
+  if (view === "album-detail")  return "albums";
+  if (view === "search")        return "photos";
+  if (view === "memory-detail") return "memories";
+  return view;
+}
+
+export default function Sidebar({
+  view,
+  onChangeView,
+  albums,
+  selectedAlbumId,
+  onSelectAlbum,
+  onCreateAlbum,
+  isAdmin,
+}: SidebarProps) {
+  const active = activeNavId(view);
+
   return (
     <aside className="w-60 bg-white border-r h-screen sticky top-0 overflow-y-auto flex-shrink-0">
       <div className="p-4">
@@ -120,19 +174,53 @@ export default function Sidebar({ view, onChangeView, isAdmin }: SidebarProps) {
               key={item.id}
               label={item.label}
               icon={item.icon}
-              active={view === item.id || (item.id === "people" && view === "unidentified")}
+              active={active === item.id}
+              to={VIEW_PATHS[item.id] ?? "/photos"}
               onClick={() => onChangeView(item.id)}
             />
           ))}
-          {(isAdmin || window.location.search.includes('debug=true')) && (
+          {(isAdmin || window.location.search.includes("debug=true")) && (
             <NavItem
               label="Admin"
               icon={<AdminIcon />}
               active={view === "admin"}
+              to="/admin"
               onClick={() => onChangeView("admin")}
             />
           )}
         </nav>
+
+        {/* Albums sub-list */}
+        {albums.length > 0 && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between px-3 mb-1">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Albums</span>
+              <button
+                onClick={onCreateAlbum}
+                className="text-xs text-blue-500 hover:text-blue-700"
+                title="Create album"
+              >
+                +
+              </button>
+            </div>
+            <div className="space-y-0.5">
+              {albums.slice(0, 12).map((album) => (
+                <button
+                  key={album.id}
+                  onClick={() => onSelectAlbum(album.id)}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-sm transition-colors ${
+                    selectedAlbumId === album.id
+                      ? "bg-blue-50 text-blue-700 font-medium"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  <span className="w-4 h-4 text-gray-400">🖼</span>
+                  <span className="truncate">{album.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

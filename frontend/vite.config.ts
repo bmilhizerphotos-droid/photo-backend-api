@@ -13,6 +13,7 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    // historyApiFallback is enabled by appType:"spa" — all non-asset 404s serve index.html
     proxy: {
       "/api": {
         target: BACKEND,
@@ -24,7 +25,9 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
-      "/photos": {
+      // NOTE: use "/photos/" (trailing slash) so the proxy only intercepts
+      // /photos/:id file-serving routes, NOT the /photos SPA page route.
+      "/photos/": {
         target: BACKEND,
         changeOrigin: true,
         secure: false,
