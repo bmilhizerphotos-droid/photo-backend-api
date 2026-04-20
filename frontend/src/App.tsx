@@ -558,10 +558,13 @@ export default function App() {
             onSubmit={(e) => { e.preventDefault(); submitSearch(); }}
           >
             <input
+              id="photo-search"
+              name="photo-search"
               type="text"
               placeholder='Search photos…'
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
+              autoComplete="off"
               className="flex-1 px-4 py-2.5 border border-gray-300 rounded-full text-sm bg-gray-100 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
             />
             {searchInput.trim() && (

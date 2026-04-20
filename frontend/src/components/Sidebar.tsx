@@ -137,7 +137,7 @@ export default function Sidebar({
         minWidth: collapsed ? 64 : 232,
         transition: "width 0.22s cubic-bezier(0.4,0,0.2,1), min-width 0.22s cubic-bezier(0.4,0,0.2,1)",
       }}
-      className="relative h-screen bg-white/65 backdrop-blur-xl border-r border-black/[0.07] flex flex-col overflow-hidden flex-shrink-0 shadow-[2px_0_20px_rgba(0,0,0,0.04)]"
+      className="relative h-screen sticky top-0 bg-white/65 backdrop-blur-xl border-r border-black/[0.07] flex flex-col flex-shrink-0 shadow-[2px_0_20px_rgba(0,0,0,0.04)]"
     >
       {/* Logo row */}
       <div
