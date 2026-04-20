@@ -95,6 +95,9 @@ export default function App() {
   const navigate = useNavigate();
   const { user, loading: authLoading, signingIn, error: authError, signIn, signOut } = useAuth();
   const [view, setView] = useState<AppView>(() => pathToView(window.location.pathname));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("sidebar-collapsed") === "true"; } catch { return false; }
+  });
   const [isApproved, setIsApproved] = useState<boolean | null>(null); // null=checking, false=denied, true=approved
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -917,6 +920,12 @@ export default function App() {
       <Sidebar
         view={view}
         isAdmin={isAdmin}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(prev => {
+          const next = !prev;
+          try { localStorage.setItem("sidebar-collapsed", String(next)); } catch {}
+          return next;
+        })}
         onChangeView={(v) => {
           if (v !== "person-detail") {
             setActivePerson(null);

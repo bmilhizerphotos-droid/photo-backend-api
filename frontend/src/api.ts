@@ -950,6 +950,10 @@ export async function bulkAction(
   return res.json();
 }
 
+export const favoritePhoto   = (id: number) => bulkAction("favorite",   [id]);
+export const unfavoritePhoto = (id: number) => bulkAction("unfavorite", [id]);
+export const trashPhoto      = (id: number) => bulkAction("delete",     [id]);
+
 export async function permanentlyDeletePhotos(photoIds: number[]): Promise<{ deleted: number }> {
   const url = API_BASE
     ? `${API_BASE}/api/photos/trash`
