@@ -174,12 +174,13 @@ export function ImageModal({ photo, onClose, onEdit, onNext, onPrev }: ImageModa
   const isMobile = window.innerWidth < 768;
   const imageUrl = photo.image_url ?? (photo as any).fullUrl;
 
+  // Info is already in the top-bar; "more" only shown when edit is hidden
+  const hasMore = !onEdit;
   const TOOLBAR = [
-    { id: "info",     tip: "Info",     path: "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
     { id: "favorite", tip: "Favorite", path: "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" },
     { id: "edit",     tip: "Edit",     path: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" },
     { id: "trash",    tip: "Delete",   path: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" },
-    { id: "more",     tip: "More",     path: "M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" },
+    ...(hasMore ? [{ id: "more", tip: "More", path: "M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" }] : []),
   ];
 
   return (
@@ -215,14 +216,40 @@ export function ImageModal({ photo, onClose, onEdit, onNext, onPrev }: ImageModa
         <span style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {photo.filename}
         </span>
-        <button
-          onClick={() => setShowInfo((s) => !s)}
-          style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: showInfo ? "rgba(255,255,255,0.15)" : "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.7)" }}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
-            <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </button>
+        {/* Top-right action buttons */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {TOOLBAR.map(({ id, tip, path }) => {
+            const isActive = id === "favorite" && favorited;
+            const isDanger = id === "trash";
+            return (
+              <button
+                key={id}
+                title={tip}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (id === "favorite") void handleFavorite();
+                  else if (id === "edit") onEdit?.(photo);
+                  else if (id === "trash") void handleTrash();
+                }}
+                style={{ width: 38, height: 38, borderRadius: "50%", border: "none", background: isActive ? "rgba(255,255,255,0.15)" : "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: isDanger ? "rgba(255,100,100,0.8)" : isActive ? "#f59e0b" : "rgba(255,255,255,0.7)", transition: "all 0.15s" }}
+              >
+                <svg width="19" height="19" viewBox="0 0 24 24" fill={id === "favorite" && favorited ? "#f59e0b" : "none"} stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <path d={path} />
+                </svg>
+              </button>
+            );
+          })}
+          {/* Info toggle */}
+          <button
+            onClick={() => setShowInfo((s) => !s)}
+            title="Info"
+            style={{ width: 38, height: 38, borderRadius: "50%", border: "none", background: showInfo ? "rgba(255,255,255,0.15)" : "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.7)", transition: "all 0.15s" }}
+          >
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+              <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* ── Main image area ── */}
@@ -323,57 +350,6 @@ export function ImageModal({ photo, onClose, onEdit, onNext, onPrev }: ImageModa
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M9 18l6-6-6-6" /></svg>
           </button>
         )}
-      </div>
-
-      {/* ── Bottom toolbar ── */}
-      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(20px)", padding: "8px 0 12px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 0 : 4, background: "rgba(255,255,255,0.08)", borderRadius: 32, padding: "4px 8px", border: "1px solid rgba(255,255,255,0.1)" }}>
-          {TOOLBAR.map(({ id, tip, path }) => {
-            const isActive = (id === "info" && showInfo) || (id === "favorite" && favorited);
-            const isDanger = id === "trash";
-            const isHidden = id === "edit" && !onEdit;
-            if (isHidden) return null;
-            return (
-              <button
-                key={id}
-                title={tip}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (id === "info") setShowInfo((s) => !s);
-                  else if (id === "favorite") void handleFavorite();
-                  else if (id === "edit") onEdit?.(photo);
-                  else if (id === "trash") void handleTrash();
-                }}
-                style={{
-                  width: isMobile ? 46 : 44,
-                  height: isMobile ? 46 : 44,
-                  borderRadius: "50%",
-                  border: "none",
-                  background: isActive ? "rgba(255,255,255,0.15)" : "transparent",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: isDanger ? "rgba(255,100,100,0.8)" : isActive ? (id === "favorite" ? "#f59e0b" : "white") : "rgba(255,255,255,0.65)",
-                  transition: "all 0.15s",
-                }}
-              >
-                <svg
-                  width={isMobile ? 22 : 20}
-                  height={isMobile ? 22 : 20}
-                  viewBox="0 0 24 24"
-                  fill={id === "favorite" && favorited ? "#f59e0b" : "none"}
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d={path} />
-                </svg>
-              </button>
-            );
-          })}
-        </div>
       </div>
 
       {/* Tag picker overlay */}
