@@ -64,6 +64,7 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
   // ── Crop mouse events ────────────────────────────────────────────────────────
   const onHandleDown = useCallback((handle: Handle) => (e: React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation(); // prevent bubbling to crop box "move" handler
     dragging.current   = handle;
     dragOrigin.current = { mx: e.clientX, my: e.clientY, rect: { ...cropRect } };
   }, [cropRect]);

@@ -3186,11 +3186,16 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     // 4. Contrast: output = contrast * input + 128 * (1 - contrast)
     if (contrast !== 1) pipeline = pipeline.linear(contrast, 128 * (1 - contrast));
 
-    // Save to temp file then atomically rename over original
+    // Save to temp file then replace original
     const ext     = path.extname(photo.full_path).toLowerCase();
     const tmpPath = photo.full_path + ".editing" + (ext || ".jpg");
     const outOpts = [".jpg", ".jpeg"].includes(ext) ? pipeline.jpeg({ quality: 92 }) : pipeline.toFormat("jpeg");
     await outOpts.toFile(tmpPath);
+
+    // On Windows, renameSync over a read-only file throws EPERM.
+    // Make original writable, delete it, then rename the temp into place.
+    try { fs.chmodSync(photo.full_path, 0o666); } catch {}
+    try { fs.unlinkSync(photo.full_path); } catch {}
     fs.renameSync(tmpPath, photo.full_path);
 
     // Invalidate thumb + upscale caches
