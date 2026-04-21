@@ -65,5 +65,9 @@ export function useInfinitePhotos(fetchPhotos: FetchPhotosFn, pageSize = 50) {
     }
   }, [fetchPhotos, pageSize]);
 
-  return { photos, offset, hasMore, loading, error, reset, loadMore };
+  const updatePhoto = useCallback((id: string | number, patch: Partial<Photo>) => {
+    setPhotos(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p));
+  }, []);
+
+  return { photos, offset, hasMore, loading, error, reset, loadMore, updatePhoto };
 }

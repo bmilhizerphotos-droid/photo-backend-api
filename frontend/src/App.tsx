@@ -176,6 +176,7 @@ export default function App() {
     error: photosError,
     reset: resetPhotos,
     loadMore,
+    updatePhoto,
   } = useInfinitePhotos(fetchPhotos, 50);
 
   // Submit search (called by form onSubmit and search button)
@@ -986,10 +987,15 @@ export default function App() {
           photo={editingPhoto}
           onClose={() => setEditingPhoto(null)}
           onSaved={() => {
-            // Add cache-buster while preserving the existing ?token=... query param
+            const ts = Date.now();
+            // Bust cache-buster on modal image URL (preserving auth token)
             const base = editingPhoto.image_url ?? '';
             const sep  = base.includes('?') ? '&' : '?';
-            setModalPhoto({ ...editingPhoto, image_url: base + `${sep}t=${Date.now()}` });
+            setModalPhoto({ ...editingPhoto, image_url: base + `${sep}t=${ts}` });
+            // Also bust the thumbnail in the photo grid
+            const thumb = (editingPhoto as any).thumbnailUrl ?? '';
+            const tsep  = thumb.includes('?') ? '&' : '?';
+            updatePhoto(editingPhoto.id, { thumbnailUrl: thumb + `${tsep}t=${ts}` });
             setEditingPhoto(null);
           }}
         />
