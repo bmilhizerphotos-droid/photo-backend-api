@@ -101,7 +101,9 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
     setAiLoading(true);
     setStatus({ msg: "Analyzing image histogram…" });
     try {
-      const { brightness, contrast } = await editAutoCorrect(photo.id);
+      const result = await editAutoCorrect(photo.id);
+      const brightness = typeof result.brightness === "number" && isFinite(result.brightness) ? result.brightness : 1;
+      const contrast   = typeof result.contrast   === "number" && isFinite(result.contrast)   ? result.contrast   : 1;
       pushEdit({ brightness, contrast });
       setStatus({ msg: `AI suggested brightness ${brightness.toFixed(2)}, contrast ${contrast.toFixed(2)}` });
     } catch (e: any) {

@@ -6,7 +6,7 @@ import cors from "cors";
 import sharp from "sharp";
 import heicConvert from "heic-convert";
 import { Worker } from "worker_threads";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { dbGet, dbAll, dbRun } from "./db.js";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
@@ -3110,17 +3110,19 @@ app.post("/api/edit-auto", authenticateToken, async (req, res) => {
 
     // Compute per-channel statistics from the image histogram
     const stats    = await sharp(imgPath).stats();
-    const channels = stats.channels; // [{mean, std, min, max}, ...]
+    const channels = (stats.channels ?? []).filter(c => c != null);
 
-    const meanLum = channels.reduce((s, c) => s + c.mean, 0) / channels.length;
-    const stdLum  = channels.reduce((s, c) => s + c.std,  0) / channels.length;
+    const meanLum = channels.length ? channels.reduce((s, c) => s + c.mean, 0) / channels.length : 128;
+    const stdLum  = channels.length ? channels.reduce((s, c) => s + c.std,  0) / channels.length : 55;
 
     // Target: mean ~128 (mid-exposure), std ~55 (good contrast spread)
     const clamp      = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
     const brightness = clamp(128 / Math.max(1, meanLum), 0.5, 2.0);
     const contrast   = clamp(55  / Math.max(1, stdLum),  0.5, 2.0);
 
-    res.json({ brightness: +brightness.toFixed(2), contrast: +contrast.toFixed(2) });
+    const bVal = isFinite(brightness) ? +brightness.toFixed(2) : 1;
+    const cVal = isFinite(contrast)   ? +contrast.toFixed(2)   : 1;
+    res.json({ brightness: bVal, contrast: cVal });
   } catch (err) {
     console.error("POST /api/edit-auto error:", err);
     res.status(500).json({ error: String(err.message) });
@@ -3193,8 +3195,13 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     await outOpts.toFile(tmpPath);
 
     // On Windows, renameSync over a read-only file throws EPERM.
-    // Make original writable, delete it, then rename the temp into place.
-    try { fs.chmodSync(photo.full_path, 0o666); } catch {}
+    // Use attrib -R (more reliable than chmodSync) to clear the read-only bit,
+    // then delete the original, then rename the temp into place.
+    if (process.platform === "win32") {
+      try { execSync(`attrib -R "${photo.full_path.replace(/"/g, '')}"`, { stdio: "ignore" }); } catch {}
+    } else {
+      try { fs.chmodSync(photo.full_path, 0o666); } catch {}
+    }
     try { fs.unlinkSync(photo.full_path); } catch {}
     fs.renameSync(tmpPath, photo.full_path);
 
