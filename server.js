@@ -115,6 +115,11 @@ async function runMigrations() {
   await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_deleted_at ON photos(deleted_at)");
   await dbRun("CREATE INDEX IF NOT EXISTS idx_photos_is_deleted ON photos(is_deleted, deleted_at DESC)");
 
+  // edited_at: set when a photo is saved via the editor
+  try { await dbRun("ALTER TABLE photos ADD COLUMN edited_at INTEGER"); } catch (err) {
+    if (!/duplicate column/i.test(err?.message || "")) console.error(err);
+  }
+
   // Auto-purge trash older than retention days on startup
   const TRASH_RETENTION_DAYS = parseInt(process.env.TRASH_RETENTION_DAYS || "30", 10);
   try {
@@ -286,6 +291,11 @@ function validatePhotoId(id) {
   return numId;
 }
 
+// Build a thumbnail URL that changes whenever the photo is edited, busting browser/CDN caches.
+function thumbUrl(id, editedAt) {
+  return editedAt ? `/thumbnails/${id}?v=${editedAt}` : `/thumbnails/${id}`;
+}
+
 // Security: Validate that a path is within the allowed PHOTO_ROOT or edits-cache directory
 const EDITS_CACHE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "edits-cache");
 function isPathWithinRoot(filePath) {
@@ -432,6 +442,7 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
         p.is_favorite,
         p.created_at,
         p.date_taken,
+        p.edited_at,
         GROUP_CONCAT(pa.album_id) as album_ids
       FROM photos p
       LEFT JOIN photo_albums pa ON p.id = pa.photo_id
@@ -447,8 +458,8 @@ app.get("/api/photos", authenticateToken, async (req, res) => {
       rows.map((r) => ({
         id: r.id,
         filename: r.filename,
-        thumbnailUrl: `/thumbnails/${r.id}`,
-        fullUrl: `/thumbnails/${r.id}?full=true`,
+        thumbnailUrl: thumbUrl(r.id, r.edited_at),
+        fullUrl: thumbUrl(r.id, r.edited_at) + (r.edited_at ? '&full=true' : '?full=true'),
         isFavorite: Boolean(r.is_favorite),
         albumIds: r.album_ids ? r.album_ids.split(",").filter(Boolean).map(Number) : [],
         createdAt: r.created_at,
@@ -3204,8 +3215,9 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     try { fs.unlinkSync(finalPath); } catch {}   // remove previous edit if present
     fs.renameSync(tmpEditPath, finalPath);        // atomic swap (both in writable dir)
 
-    // Point the DB record at the new writable file so all future reads/edits use it.
-    await dbRun("UPDATE photos SET full_path = ? WHERE id = ?", [finalPath, photoId]);
+    // Point the DB record at the new writable file and stamp edited_at for cache-busting.
+    const editedAt = Math.floor(Date.now() / 1000);
+    await dbRun("UPDATE photos SET full_path = ?, edited_at = ? WHERE id = ?", [finalPath, editedAt, photoId]);
 
     // Invalidate thumb + upscale caches
     const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
