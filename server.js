@@ -3118,22 +3118,75 @@ app.post("/api/edit-auto", authenticateToken, async (req, res) => {
     const photo = await dbGet("SELECT full_path FROM photos WHERE id = ? AND is_deleted = 0", [photoId]);
     if (!photo?.full_path) return res.status(404).json({ error: "Photo not found" });
 
-    // Prefer thumbnail (faster to read, same histogram)
     const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
     const imgPath   = fs.existsSync(thumbPath) ? thumbPath : photo.full_path;
 
-    // Compute per-channel statistics from the image histogram
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    // Try Gemini vision analysis first
+    if (GEMINI_API_KEY) {
+      try {
+        const imgBuf    = fs.readFileSync(imgPath);
+        const imgBase64 = imgBuf.toString("base64");
+        const mimeType  = imgPath.endsWith(".jpg") || imgPath.endsWith(".jpeg") ? "image/jpeg" : "image/png";
+
+        const prompt = `You are a professional digital photo editor and colorist with expertise in Adobe Lightroom and Capture One.
+
+Analyze this image and return ONLY a JSON object (no markdown, no explanation) with suggested adjustments to achieve a professional gallery aesthetic:
+
+{
+  "brightness": <number between 0.5 and 2.0, where 1.0 = no change>,
+  "contrast": <number between 0.5 and 2.0, where 1.0 = no change>,
+  "notes": "<one sentence describing the main issues and adjustments>"
+}
+
+Guidelines:
+- Adjust brightness to recover shadow detail without blowing highlights (target balanced mid-tone exposure)
+- Adjust contrast to create dynamic, lifelike tonal range using an S-curve approach
+- Correct for underexposure, overexposure, flat/washed-out looks, or harsh contrast
+- Values above 1.0 increase; below 1.0 decrease
+- Be precise: small adjustments like 1.15 or 0.85 are often more appropriate than extreme values`;
+
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: prompt },
+                  { inlineData: { mimeType, data: imgBase64 } }
+                ]
+              }],
+              generationConfig: { temperature: 0.2, maxOutputTokens: 256 }
+            })
+          }
+        );
+
+        if (resp.ok) {
+          const data    = await resp.json();
+          const text    = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+          const match   = text.match(/\{[\s\S]*\}/);
+          if (match) {
+            const parsed = JSON.parse(match[0]);
+            const bVal   = isFinite(parsed.brightness) ? clamp(+parsed.brightness, 0.5, 2.0) : 1;
+            const cVal   = isFinite(parsed.contrast)   ? clamp(+parsed.contrast,   0.5, 2.0) : 1;
+            return res.json({ brightness: +bVal.toFixed(2), contrast: +cVal.toFixed(2), notes: parsed.notes ?? "" });
+          }
+        }
+      } catch (geminiErr) {
+        console.warn("Gemini auto-correct failed, falling back to histogram:", geminiErr.message);
+      }
+    }
+
+    // Fallback: histogram-based analysis
     const stats    = await sharp(imgPath).stats();
     const channels = (stats.channels ?? []).filter(c => c != null);
-
-    const meanLum = channels.length ? channels.reduce((s, c) => s + c.mean, 0) / channels.length : 128;
-    const stdLum  = channels.length ? channels.reduce((s, c) => s + c.std,  0) / channels.length : 55;
-
-    // Target: mean ~128 (mid-exposure), std ~55 (good contrast spread)
-    const clamp      = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const meanLum  = channels.length ? channels.reduce((s, c) => s + c.mean, 0) / channels.length : 128;
+    const stdLum   = channels.length ? channels.reduce((s, c) => s + c.std,  0) / channels.length : 55;
     const brightness = clamp(128 / Math.max(1, meanLum), 0.5, 2.0);
     const contrast   = clamp(55  / Math.max(1, stdLum),  0.5, 2.0);
-
     const bVal = isFinite(brightness) ? +brightness.toFixed(2) : 1;
     const cVal = isFinite(contrast)   ? +contrast.toFixed(2)   : 1;
     res.json({ brightness: bVal, contrast: cVal });

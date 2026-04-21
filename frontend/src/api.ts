@@ -1210,7 +1210,7 @@ export async function toggleUserApproval(uid: string, isApproved: boolean): Prom
 
 // ── Photo Editor ────────────────────────────────
 
-export async function editAutoCorrect(photoId: number): Promise<{ brightness: number; contrast: number }> {
+export async function editAutoCorrect(photoId: number): Promise<{ brightness: number; contrast: number; notes?: string }> {
   const res = await fetchWithAuth(`${API_BASE}/api/edit-auto`, { method: "POST", body: JSON.stringify({ photoId }) }, 30000);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
