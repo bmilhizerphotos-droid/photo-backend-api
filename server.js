@@ -3188,28 +3188,17 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     // 4. Contrast: output = contrast * input + 128 * (1 - contrast)
     if (contrast !== 1) pipeline = pipeline.linear(contrast, 128 * (1 - contrast));
 
-    // Save to temp file then replace original
-    const ext     = path.extname(photo.full_path).toLowerCase();
-    const tmpPath = photo.full_path + ".editing" + (ext || ".jpg");
-    const outOpts = [".jpg", ".jpeg"].includes(ext) ? pipeline.jpeg({ quality: 92 }) : pipeline.toFormat("jpeg");
-    await outOpts.toFile(tmpPath);
+    // Write the edited image to a dedicated writable directory — never touch the
+    // original file (Google Takeout files are often read-only on Windows).
+    const EDITS_DIR = path.join(__dirname, "edits-cache");
+    fs.mkdirSync(EDITS_DIR, { recursive: true });
+    const ext      = path.extname(photo.full_path).toLowerCase();
+    const editedPath = path.join(EDITS_DIR, `${photoId}_edited.jpg`);
+    const outOpts  = [".jpg", ".jpeg"].includes(ext) ? pipeline.jpeg({ quality: 92 }) : pipeline.toFormat("jpeg");
+    await outOpts.toFile(editedPath);
 
-    // Replace the original file.
-    // On Windows, Google Takeout files often have FILE_ATTRIBUTE_READONLY set.
-    // Renaming a file to a NEW name only needs directory write access (not file write access),
-    // so we move the original aside first, then drop the temp in its place.
-    const bakPath = photo.full_path + ".bak";
-    try { fs.unlinkSync(bakPath); } catch {}           // remove any stale backup
-    try {
-      fs.renameSync(photo.full_path, bakPath);         // move original aside (no file-write needed)
-      fs.renameSync(tmpPath, photo.full_path);         // put edited file in place
-      try { fs.unlinkSync(bakPath); } catch {}         // remove original (best-effort)
-    } catch {
-      // Fallback: try chmod → unlink → rename
-      try { fs.chmodSync(photo.full_path, 0o666); } catch {}
-      try { fs.unlinkSync(photo.full_path); } catch {}
-      fs.renameSync(tmpPath, photo.full_path);
-    }
+    // Point the DB record at the new writable file so all future reads/edits use it.
+    await dbRun("UPDATE photos SET full_path = ? WHERE id = ?", [editedPath, photoId]);
 
     // Invalidate thumb + upscale caches
     const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
