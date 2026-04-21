@@ -286,12 +286,15 @@ function validatePhotoId(id) {
   return numId;
 }
 
-// Security: Validate that a path is within the allowed PHOTO_ROOT directory
+// Security: Validate that a path is within the allowed PHOTO_ROOT or edits-cache directory
+const EDITS_CACHE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "edits-cache");
 function isPathWithinRoot(filePath) {
   if (!filePath) return false;
   const resolvedPath = path.resolve(filePath);
   const resolvedRoot = path.resolve(PHOTO_ROOT);
-  return resolvedPath.startsWith(resolvedRoot + path.sep) || resolvedPath === resolvedRoot;
+  const resolvedEdits = path.resolve(EDITS_CACHE_DIR);
+  return resolvedPath.startsWith(resolvedRoot + path.sep) || resolvedPath === resolvedRoot
+      || resolvedPath.startsWith(resolvedEdits + path.sep) || resolvedPath === resolvedEdits;
 }
 
 function findFileRecursive(root, targetName) {
@@ -3190,7 +3193,7 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
 
     // Write the edited image to a dedicated writable directory — never touch the
     // original file (Google Takeout files are often read-only on Windows).
-    const EDITS_DIR = path.join(__dirname, "edits-cache");
+    const EDITS_DIR = EDITS_CACHE_DIR;
     fs.mkdirSync(EDITS_DIR, { recursive: true });
     const ext         = path.extname(photo.full_path).toLowerCase();
     const finalPath   = path.join(EDITS_DIR, `${photoId}_edited.jpg`);
