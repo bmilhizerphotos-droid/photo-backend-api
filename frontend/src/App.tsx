@@ -986,9 +986,10 @@ export default function App() {
           photo={editingPhoto}
           onClose={() => setEditingPhoto(null)}
           onSaved={() => {
-            // bust thumbnail cache then reopen the modal with a fresh URL
-            const bust = `?t=${Date.now()}`;
-            setModalPhoto({ ...editingPhoto, image_url: (editingPhoto.image_url ?? '').split('?')[0] + bust });
+            // Add cache-buster while preserving the existing ?token=... query param
+            const base = editingPhoto.image_url ?? '';
+            const sep  = base.includes('?') ? '&' : '?';
+            setModalPhoto({ ...editingPhoto, image_url: base + `${sep}t=${Date.now()}` });
             setEditingPhoto(null);
           }}
         />
