@@ -110,9 +110,10 @@ models/
 faceapi-models/
 
 # =========================
-# Thumbnail cache
+# Thumbnail cache / edits cache
 # =========================
 thumb-cache/
+edits-cache/
 
 # =========================
 # Separate nested repo (Expo / mobile) - ignore entirely
