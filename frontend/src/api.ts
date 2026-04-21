@@ -1227,6 +1227,8 @@ export interface EditSaveParams {
   rotation: number;
   brightness: number;
   contrast: number;
+  saturation: number;
+  sharpness: number;
   crop: { x: number; y: number; w: number; h: number } | null;
   useUpscaled: boolean;
 }

@@ -3135,17 +3135,19 @@ app.post("/api/edit-auto", authenticateToken, async (req, res) => {
 Analyze this image and return ONLY a JSON object (no markdown, no explanation) with suggested adjustments to achieve a professional gallery aesthetic:
 
 {
-  "brightness": <number between 0.5 and 2.0, where 1.0 = no change>,
-  "contrast": <number between 0.5 and 2.0, where 1.0 = no change>,
+  "brightness": <multiplier 0.5–2.0, where 1.0 = no change>,
+  "contrast": <multiplier 0.5–2.0, where 1.0 = no change>,
+  "saturation": <multiplier 0.0–3.0, where 1.0 = no change>,
+  "sharpness": <sigma 0.0–3.0, where 0 = no sharpening>,
   "notes": "<one sentence describing the main issues and adjustments>"
 }
 
 Guidelines:
-- Adjust brightness to recover shadow detail without blowing highlights (target balanced mid-tone exposure)
-- Adjust contrast to create dynamic, lifelike tonal range using an S-curve approach
-- Correct for underexposure, overexposure, flat/washed-out looks, or harsh contrast
-- Values above 1.0 increase; below 1.0 decrease
-- Be precise: small adjustments like 1.15 or 0.85 are often more appropriate than extreme values`;
+- brightness: correct underexposure/overexposure; target balanced mid-tones. Small deltas (1.1, 0.9) are often right.
+- contrast: boost flat/washed-out images; reduce harsh images. An S-curve approach.
+- saturation: lift dull/grey scenes; reduce over-saturated ones. Most photos need 1.0–1.4.
+- sharpness: 0 for already-sharp or noisy images; 0.5–1.5 for soft/slightly blurry shots; up to 3 for very soft.
+- Be precise — avoid extreme values unless the image clearly needs them.`;
 
         const resp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
@@ -3170,9 +3172,17 @@ Guidelines:
           const match   = text.match(/\{[\s\S]*\}/);
           if (match) {
             const parsed = JSON.parse(match[0]);
-            const bVal   = isFinite(parsed.brightness) ? clamp(+parsed.brightness, 0.5, 2.0) : 1;
-            const cVal   = isFinite(parsed.contrast)   ? clamp(+parsed.contrast,   0.5, 2.0) : 1;
-            return res.json({ brightness: +bVal.toFixed(2), contrast: +cVal.toFixed(2), notes: parsed.notes ?? "" });
+            const bVal   = isFinite(parsed.brightness)  ? clamp(+parsed.brightness, 0.5, 2.0) : 1;
+            const cVal   = isFinite(parsed.contrast)    ? clamp(+parsed.contrast,   0.5, 2.0) : 1;
+            const sVal   = isFinite(parsed.saturation)  ? clamp(+parsed.saturation, 0.0, 3.0) : 1;
+            const shVal  = isFinite(parsed.sharpness)   ? clamp(+parsed.sharpness,  0.0, 3.0) : 0;
+            return res.json({
+              brightness: +bVal.toFixed(2),
+              contrast:   +cVal.toFixed(2),
+              saturation: +sVal.toFixed(2),
+              sharpness:  +shVal.toFixed(1),
+              notes: parsed.notes ?? ""
+            });
           }
         }
       } catch (geminiErr) {
@@ -3223,7 +3233,7 @@ app.post("/api/edit-upscale", authenticateToken, async (req, res) => {
 
 app.post("/api/edit-save", authenticateToken, async (req, res) => {
   try {
-    const { photoId, rotation = 0, brightness = 1, contrast = 1, crop = null, useUpscaled = false } = req.body ?? {};
+    const { photoId, rotation = 0, brightness = 1, contrast = 1, saturation = 1, sharpness = 0, crop = null, useUpscaled = false } = req.body ?? {};
     if (!photoId) return res.status(400).json({ error: "photoId required" });
 
     const photo = await dbGet("SELECT full_path FROM photos WHERE id = ? AND is_deleted = 0", [photoId]);
@@ -3249,11 +3259,17 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     // 2. Rotate
     if (rotation && rotation !== 0) pipeline = pipeline.rotate(rotation);
 
-    // 3. Brightness (Sharp modulate uses multiplier)
-    if (brightness !== 1) pipeline = pipeline.modulate({ brightness });
+    // 3. Brightness + Saturation (Sharp modulate handles both)
+    const modOpts = {};
+    if (brightness !== 1) modOpts.brightness = brightness;
+    if (saturation !== 1) modOpts.saturation = saturation;
+    if (Object.keys(modOpts).length) pipeline = pipeline.modulate(modOpts);
 
     // 4. Contrast: output = contrast * input + 128 * (1 - contrast)
     if (contrast !== 1) pipeline = pipeline.linear(contrast, 128 * (1 - contrast));
+
+    // 5. Sharpness (sigma in pixels)
+    if (sharpness > 0) pipeline = pipeline.sharpen({ sigma: sharpness });
 
     // Write the edited image to a dedicated writable directory — never touch the
     // original file (Google Takeout files are often read-only on Windows).

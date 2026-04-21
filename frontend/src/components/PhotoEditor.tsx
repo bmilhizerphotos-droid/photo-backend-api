@@ -6,10 +6,12 @@ interface EditState {
   rotation: 0 | 90 | 180 | 270;
   brightness: number;
   contrast: number;
+  saturation: number;
+  sharpness: number;
   useUpscaled: boolean;
 }
 
-const DEFAULT: EditState = { rotation: 0, brightness: 1, contrast: 1, useUpscaled: false };
+const DEFAULT: EditState = { rotation: 0, brightness: 1, contrast: 1, saturation: 1, sharpness: 0, useUpscaled: false };
 
 interface Props {
   photo: Photo;
@@ -99,13 +101,15 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
   // ── AI auto-correct ──────────────────────────────────────────────────────────
   const handleAiAuto = async () => {
     setAiLoading(true);
-    setStatus({ msg: "Analyzing image histogram…" });
+    setStatus({ msg: "Analyzing with AI…" });
     try {
       const result = await editAutoCorrect(photo.id);
-      const brightness = typeof result.brightness === "number" && isFinite(result.brightness) ? result.brightness : 1;
-      const contrast   = typeof result.contrast   === "number" && isFinite(result.contrast)   ? result.contrast   : 1;
-      pushEdit({ brightness, contrast });
-      const detail = result.notes ? ` — ${result.notes}` : ` (brightness ${brightness.toFixed(2)}, contrast ${contrast.toFixed(2)})`;
+      const brightness  = typeof result.brightness  === "number" && isFinite(result.brightness)  ? result.brightness  : 1;
+      const contrast    = typeof result.contrast    === "number" && isFinite(result.contrast)    ? result.contrast    : 1;
+      const saturation  = typeof result.saturation  === "number" && isFinite(result.saturation)  ? result.saturation  : 1;
+      const sharpness   = typeof result.sharpness   === "number" && isFinite(result.sharpness)   ? result.sharpness   : 0;
+      pushEdit({ brightness, contrast, saturation, sharpness });
+      const detail = result.notes ? ` — ${result.notes}` : "";
       setStatus({ msg: `AI auto-correct applied${detail}` });
     } catch (e: any) {
       setStatus({ msg: e.message, err: true });
@@ -139,6 +143,8 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
         rotation: current.rotation,
         brightness: current.brightness,
         contrast: current.contrast,
+        saturation: current.saturation,
+        sharpness: current.sharpness,
         crop: cropMode ? cropRect : null,
         useUpscaled: current.useUpscaled,
       });
@@ -150,7 +156,7 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
   };
 
   // ── Image preview styles (live) ───────────────────────────────────────────────
-  const previewFilter    = `brightness(${current.brightness}) contrast(${current.contrast})`;
+  const previewFilter    = `brightness(${current.brightness}) contrast(${current.contrast}) saturate(${current.saturation})`;
   const previewTransform = cropMode ? "none" : `rotate(${current.rotation}deg)`;
 
   return (
@@ -272,6 +278,30 @@ export default function PhotoEditor({ photo, onClose, onSaved }: Props) {
             className="w-28 accent-blue-500"
           />
           <span className="text-xs text-gray-400 w-8 tabular-nums">{current.contrast.toFixed(2)}</span>
+        </div>
+
+        {/* Saturation */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400 w-16">Saturation</span>
+          <input type="range" min="0" max="3" step="0.05"
+            value={current.saturation}
+            onPointerDown={snapshot}
+            onChange={e => setCurrent(c => ({ ...c, saturation: parseFloat(e.target.value) }))}
+            className="w-28 accent-blue-500"
+          />
+          <span className="text-xs text-gray-400 w-8 tabular-nums">{current.saturation.toFixed(2)}</span>
+        </div>
+
+        {/* Sharpness */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400 w-16">Sharpen</span>
+          <input type="range" min="0" max="3" step="0.1"
+            value={current.sharpness}
+            onPointerDown={snapshot}
+            onChange={e => setCurrent(c => ({ ...c, sharpness: parseFloat(e.target.value) }))}
+            className="w-28 accent-blue-500"
+          />
+          <span className="text-xs text-gray-400 w-8 tabular-nums">{current.sharpness.toFixed(1)}</span>
         </div>
 
         {/* Crop toggle */}
