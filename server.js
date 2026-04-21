@@ -3192,13 +3192,17 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     // original file (Google Takeout files are often read-only on Windows).
     const EDITS_DIR = path.join(__dirname, "edits-cache");
     fs.mkdirSync(EDITS_DIR, { recursive: true });
-    const ext      = path.extname(photo.full_path).toLowerCase();
-    const editedPath = path.join(EDITS_DIR, `${photoId}_edited.jpg`);
-    const outOpts  = [".jpg", ".jpeg"].includes(ext) ? pipeline.jpeg({ quality: 92 }) : pipeline.toFormat("jpeg");
-    await outOpts.toFile(editedPath);
+    const ext         = path.extname(photo.full_path).toLowerCase();
+    const finalPath   = path.join(EDITS_DIR, `${photoId}_edited.jpg`);
+    const tmpEditPath = path.join(EDITS_DIR, `${photoId}_editing.tmp.jpg`);
+    // Sharp requires input ≠ output; write to a temp name then rename into place.
+    const outOpts = [".jpg", ".jpeg"].includes(ext) ? pipeline.jpeg({ quality: 92 }) : pipeline.toFormat("jpeg");
+    await outOpts.toFile(tmpEditPath);
+    try { fs.unlinkSync(finalPath); } catch {}   // remove previous edit if present
+    fs.renameSync(tmpEditPath, finalPath);        // atomic swap (both in writable dir)
 
     // Point the DB record at the new writable file so all future reads/edits use it.
-    await dbRun("UPDATE photos SET full_path = ? WHERE id = ?", [editedPath, photoId]);
+    await dbRun("UPDATE photos SET full_path = ? WHERE id = ?", [finalPath, photoId]);
 
     // Invalidate thumb + upscale caches
     const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
