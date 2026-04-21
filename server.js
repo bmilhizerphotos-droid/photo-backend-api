@@ -3194,16 +3194,22 @@ app.post("/api/edit-save", authenticateToken, async (req, res) => {
     const outOpts = [".jpg", ".jpeg"].includes(ext) ? pipeline.jpeg({ quality: 92 }) : pipeline.toFormat("jpeg");
     await outOpts.toFile(tmpPath);
 
-    // On Windows, renameSync over a read-only file throws EPERM.
-    // Use attrib -R (more reliable than chmodSync) to clear the read-only bit,
-    // then delete the original, then rename the temp into place.
-    if (process.platform === "win32") {
-      try { execSync(`attrib -R "${photo.full_path.replace(/"/g, '')}"`, { stdio: "ignore" }); } catch {}
-    } else {
+    // Replace the original file.
+    // On Windows, Google Takeout files often have FILE_ATTRIBUTE_READONLY set.
+    // Renaming a file to a NEW name only needs directory write access (not file write access),
+    // so we move the original aside first, then drop the temp in its place.
+    const bakPath = photo.full_path + ".bak";
+    try { fs.unlinkSync(bakPath); } catch {}           // remove any stale backup
+    try {
+      fs.renameSync(photo.full_path, bakPath);         // move original aside (no file-write needed)
+      fs.renameSync(tmpPath, photo.full_path);         // put edited file in place
+      try { fs.unlinkSync(bakPath); } catch {}         // remove original (best-effort)
+    } catch {
+      // Fallback: try chmod → unlink → rename
       try { fs.chmodSync(photo.full_path, 0o666); } catch {}
+      try { fs.unlinkSync(photo.full_path); } catch {}
+      fs.renameSync(tmpPath, photo.full_path);
     }
-    try { fs.unlinkSync(photo.full_path); } catch {}
-    fs.renameSync(tmpPath, photo.full_path);
 
     // Invalidate thumb + upscale caches
     const thumbPath = path.join(THUMB_CACHE_DIR, `${photoId}.jpg`);
