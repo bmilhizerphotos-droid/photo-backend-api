@@ -40,7 +40,6 @@ import ScreenshotsView from "./components/ScreenshotsView";
 import TrashView from "./components/TrashView";
 import FavoritesView from "./components/FavoritesView";
 import OnThisDayView from "./components/OnThisDayView";
-import MapView from "./components/MapView";
 import PlacesView from "./components/PlacesView";
 import VideosView from "./components/VideosView";
 import BirthdayBanner from "./components/BirthdayBanner";
@@ -77,7 +76,7 @@ function pathToView(pathname: string): AppView {
     "/screenshots": "screenshots",
     "/favorites": "favorites",
     "/people": "people",
-    "/map": "map",
+    "/map": "places",
     "/places": "places",
     "/videos": "videos",
     "/recently-added": "recently-added",
@@ -817,13 +816,6 @@ export default function App() {
     }
 
     if (view === "on-this-day") return <OnThisDayView />;
-    if (view === "map") return (
-      <MapView
-        onOpenPhoto={(id, filename) => {
-          setModalPhoto({ id, filename, thumbnailUrl: `${import.meta.env.VITE_API_BASE_URL ?? ""}/thumbnails/${id}`, fullUrl: `${import.meta.env.VITE_API_BASE_URL ?? ""}/photos/${id}` } as Photo);
-        }}
-      />
-    );
     if (view === "memories") return (
       <MemoriesGrid onSelectMemory={(memory) => setSlideshowMemory(memory)} />
     );
