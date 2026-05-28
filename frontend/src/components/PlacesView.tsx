@@ -1,8 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchPlacesPhotos, Photo } from '../api';
 import { useIntersectionSentinel } from '../hooks/useIntersectionSentinel';
+import MapView from './MapView';
 
 const PAGE_SIZE = 50;
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function PlacesView({
   onPhotoClick,
@@ -58,9 +60,20 @@ export default function PlacesView({
     rootMargin: '800px',
   });
 
+  const handleOpenPhoto = onPhotoClick
+    ? (id: number, filename: string) =>
+        onPhotoClick({
+          id,
+          filename,
+          thumbnailUrl: `${API_BASE}/thumbnails/${id}`,
+          fullUrl: `${API_BASE}/photos/${id}`,
+        } as Photo)
+    : undefined;
+
   return (
     <div className="p-4">
-      <div className="mb-6">
+      {/* Header */}
+      <div className="mb-4">
         <h1 className="text-2xl font-semibold text-gray-900">Places</h1>
         <p className="text-sm text-gray-500 mt-1">
           {total > 0
@@ -69,6 +82,12 @@ export default function PlacesView({
         </p>
       </div>
 
+      {/* Map */}
+      <div className="mb-6 rounded-xl overflow-hidden border border-gray-200 shadow-sm" style={{ height: 400 }}>
+        <MapView onOpenPhoto={handleOpenPhoto} hideHeader />
+      </div>
+
+      {/* Photo grid */}
       {error && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
           {error}
@@ -84,7 +103,7 @@ export default function PlacesView({
       )}
 
       {!loading && photos.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-24 text-center">
+        <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="text-6xl mb-4">📍</div>
           <h2 className="text-xl font-medium text-gray-700 mb-2">No geotagged photos</h2>
           <p className="text-sm text-gray-500 max-w-sm">
@@ -103,7 +122,7 @@ export default function PlacesView({
               title={photo.filename}
             >
               <img
-                src={photo.thumbnailUrl || photo.thumbnail_url}
+                src={photo.thumbnailUrl || (photo as any).thumbnail_url}
                 alt={photo.filename}
                 className="w-full h-full object-cover group-hover:opacity-90 transition-opacity"
                 loading="lazy"
