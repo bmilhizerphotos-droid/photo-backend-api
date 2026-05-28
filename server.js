@@ -1,12 +1,14 @@
-// FILE: server.js
+﻿// FILE: server.js
 import express from "express";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import fs from "fs";
 import path from "path";
 import cors from "cors";
 import sharp from "sharp";
 import heicConvert from "heic-convert";
 import { Worker } from "worker_threads";
-import { exec, execSync } from "child_process";
+import { exec, execSync, spawn } from "child_process";
 import { dbGet, dbAll, dbRun } from "./db.js";
 import admin from "firebase-admin";
 import { fileURLToPath } from "url";
@@ -25,10 +27,10 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-const ADMIN_EMAIL = "bmilhizerphotos@gmail.com";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "bmilhizerphotos@gmail.com";
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = parseEnvNumber("PORT", 3001, { min: 1, max: 65535, integer: true });
 const PHOTO_ROOT = process.env.PHOTO_ROOT || "G:/Photos";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 let duplicateScanRunning = false;
@@ -58,8 +60,22 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors({ origin: allowedOrigins, credentials: true, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }));
 app.use(express.json());
+
+const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false });
+const strictLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
+app.use("/api/", apiLimiter);
+app.use("/api/me", strictLimiter);
+app.use("/api/admin", strictLimiter);
+function parseEnvNumber(name, defaultValue, { min = -Infinity, max = Infinity, integer = false } = {}) {
+  const raw = Number(process.env[name]);
+  if (!Number.isFinite(raw)) return defaultValue;
+  const n = integer ? Math.trunc(raw) : raw;
+  if (n < min || n > max) return defaultValue;
+  return n;
+}
 
 async function runMigrations() {
   try {
@@ -1596,10 +1612,9 @@ async function computeUnidentifiedClusters() {
 // Best-effort ExifTool write-back (no-op if exiftool not installed)
 function writePersonMetadata(filePath, personName) {
   return new Promise((resolve) => {
-    exec(`exiftool -Keywords+="${personName}" -overwrite_original "${filePath}"`, (err) => {
-      if (err) console.log("[exiftool] skipped:", err.message?.split("\n")[0]);
-      resolve();
-    });
+    const proc = spawn("exiftool", [`-Keywords+=${personName}`, "-overwrite_original", filePath]);
+    proc.on("error", (err) => console.log("[exiftool] skipped:", err.message?.split("\n")[0]));
+    proc.on("close", () => resolve());
   });
 }
 
@@ -2476,11 +2491,9 @@ const EXIFTOOL = path.join(__dirname, "exiftool.exe");
 function writeExifPersonName(filePath, personName) {
   return new Promise((resolve) => {
     const tool = fs.existsSync(EXIFTOOL) ? EXIFTOOL : "exiftool";
-    const cmd = `"${tool}" -overwrite_original -XMP-mwg-rs:RegionName="${personName.replace(/"/g, '\\"')}" "${filePath}"`;
-    exec(cmd, (err) => {
-      if (err) console.log("[exiftool] write skipped:", err.message?.split("\n")[0]);
-      resolve();
-    });
+    const proc = spawn(tool, ["-overwrite_original", `-XMP-mwg-rs:RegionName=${personName}`, filePath]);
+    proc.on("error", (err) => console.log("[exiftool] write skipped:", err.message?.split("\n")[0]));
+    proc.on("close", () => resolve());
   });
 }
 
@@ -3356,3 +3369,4 @@ async function start() {
 }
 
 start();
+

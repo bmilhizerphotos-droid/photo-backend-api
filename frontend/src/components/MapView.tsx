@@ -35,9 +35,10 @@ function FitBounds({ photos }: { photos: MapPhoto[] }) {
 
 interface Props {
   onOpenPhoto?: (id: number, filename: string) => void;
+  hideHeader?: boolean;
 }
 
-export default function MapView({ onOpenPhoto }: Props) {
+export default function MapView({ onOpenPhoto, hideHeader }: Props) {
   const [photos, setPhotos] = useState<MapPhoto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,15 +98,17 @@ export default function MapView({ onOpenPhoto }: Props) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 pb-2 flex items-center gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Map</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {filtered.length.toLocaleString()} photo{filtered.length !== 1 ? "s" : ""} with location data
-            {yearFilter ? ` in ${yearFilter}` : ""}
-          </p>
-        </div>
-        <div className="ml-auto flex items-center gap-2 flex-wrap">
+      <div className="px-4 pb-2 flex items-center gap-3 flex-wrap" style={{ paddingTop: hideHeader ? 0 : 16 }}>
+        {!hideHeader && (
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Map</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {filtered.length.toLocaleString()} photo{filtered.length !== 1 ? "s" : ""} with location data
+              {yearFilter ? ` in ${yearFilter}` : ""}
+            </p>
+          </div>
+        )}
+        <div className={hideHeader ? "" : "ml-auto"} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button
             onClick={() => setYearFilter(null)}
             className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${

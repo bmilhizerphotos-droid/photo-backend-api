@@ -25,6 +25,15 @@ export function useAuth(): UseAuthReturn {
     try {
       await signInWithGoogle();
     } catch (err: unknown) {
+      const code = (err as { code?: string } | null)?.code ?? '';
+      // Redirect/popup transitional states are expected and not user-actionable.
+      if (
+        code === 'auth/cancelled-popup-request' ||
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/popup-blocked'
+      ) {
+        return;
+      }
       setError(String(err));
     } finally {
       setSigningIn(false);
@@ -43,10 +52,15 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     // Finish redirect flow if we came back from Google
     completeRedirectSignIn().catch((e) => {
-      // Only set error for actual auth errors, not null results
-      if (e && typeof e === 'object' && 'code' in e) {
-        setError(String(e));
+      const code = (e as { code?: string } | null)?.code ?? '';
+      if (
+        code === 'auth/no-auth-event' ||
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request'
+      ) {
+        return;
       }
+      if (e && typeof e === 'object' && 'code' in e) setError(String(e));
     });
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
